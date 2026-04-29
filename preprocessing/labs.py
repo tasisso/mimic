@@ -1,13 +1,26 @@
 import pandas as pd
-from utils.utils import load_tbl, build_dirs
+from utils.utils import load_tbl, get_path
 from utils.constants import LAB_LABELS
 
 
-def load_labs(dirs):
+def load_labs(dirs, cohort, chunksize=200000):
     '''load and label raw lab events'''
-    labs = load_tbl('LABEVENTS.csv.gz', source='hosp', dirs=dirs)
+    path = get_path('LABEVENTS.csv.gz', source='hosp', dirs=dirs)
     d_labs = load_tbl('D_LABITEMS.csv.gz', source='hosp', dirs=dirs)
-    return labs.merge(d_labs[['itemid', 'label']], how='inner', on='itemid')
+    label_map = d_labs.set_index('itemid')['label'].to_dict()
+    hadm_ids = set(cohort['hadm_id'])
+
+    kept_rows = []
+    for chunk in pd.read_csv(path, chunksize=chunksize):
+        chunk.columns = chunk.columns.str.lower()
+        chunk = chunk[chunk['hadm_id'].isin(hadm_ids)]
+        if chunk.empty:
+            continue
+        chunk['label'] = chunk['itemid'].map(label_map)
+        if not chunk.empty:
+            kept_rows.append(chunk)
+
+    return pd.concat(kept_rows, ignore_index=True)
 
 def match_labs(labs, cohort):
     '''match labs to waveform windows'''
@@ -34,13 +47,13 @@ def filter_labs(matched_labs, labels=LAB_LABELS):
         .reset_index())   
     records_with_all_labs = record_labflags[record_labflags[labels].eq(1).all(axis=1)]
 
-    return matched_labs.merged(records_with_all_labs,
+    return matched_labs.merge(records_with_all_labs,
                                on='record_id',
                                how='inner')
 
 def get_labs(dirs, cohort):
 
-    labs = load_labs(dirs)
+    labs = load_labs(dirs, cohort)
     matched = match_labs(labs, cohort)
 
     return filter_labs(matched)
