@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mimic-multimodal"
+version = "0.1.0"
+dependencies = [
+    "pandas",
+    "numpy",
+    "wfdb",
+    "h5py",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
