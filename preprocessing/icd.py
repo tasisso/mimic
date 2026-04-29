@@ -30,18 +30,22 @@ def map_icd9_to_10(codes, gem_dir):
         dict mapping icd9 -> [icd10 codes]
     '''
     converter = ICD_CM_Conversion(
-        i9_cm_path=os.path.join(gem_dir, '2018_I9_cm_gem.txt'),
-        i10_cm_path=os.path.join(gem_dir, '2018_I10_cm_gem.txt')
+        i9_cm_path=os.path.join(gem_dir, '2018_I9gem.txt'),
+        i10_cm_path=os.path.join(gem_dir, '2018_I10gem.txt')
     )
     mapping = converter.icd9_to_10_cm(codes)
     
     return mapping
 
-def filter_icd(icd, labels=LAB_LABELS):
-    '''filter to labels of interest'''
-    return icd[icd['label'].isin(labels)]
+def filter_icd(icd):
+    '''
+    Filter Y codes
+    Y: "External Causes of Morbidity"
+    '''
+    mask = icd['icd10_code'].str.startswith('Y')
+    return icd[~mask]
 
-def get_icd(config, dirs,  cohort):
+def get_icd(config, dirs, cohort):
     mimic = cohort['mimic'].iloc[0]
     gem_dir = config['paths']['gem']
     mimic4_root = config['paths'][f'mimic4_clinical_root']
