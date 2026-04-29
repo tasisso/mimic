@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: mimic-multimodal
-Version: 0.1.0
-Requires-Dist: pandas
-Requires-Dist: numpy
-Requires-Dist: wfdb
-Requires-Dist: h5py

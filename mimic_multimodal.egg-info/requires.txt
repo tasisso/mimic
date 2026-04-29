@@ -1,4 +1,0 @@
-pandas
-numpy
-wfdb
-h5py
