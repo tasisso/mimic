@@ -1,5 +1,5 @@
 import pandas as pd
-from utils.utils import load_tbl, build_dirs
+from utils.utils import load_tbl
 from utils.constants import INPUT_LABELS
 
 def get_inputs(dirs, cohort):
@@ -45,12 +45,13 @@ def match_inputs(inputs, cohort):
     
     #Overlapping with the waveform window
     return stay_inputs[
-        (stay_inputs['start_timestamp'] < stay_inputs['endttime']) &
+        (stay_inputs['start_timestamp'] < stay_inputs['endtime']) &
         (stay_inputs['end_timestamp'] > stay_inputs['starttime'])
     ]
 
 def filter_inputs(inputs, labels=INPUT_LABELS):
     '''filter to labels of interest'''
+    inputs = inputs[inputs['label'].isin(labels)]
     return inputs
 
 
