@@ -65,7 +65,8 @@ def get_weights_from_inputs(icustays, inputs):
     stay_weights['hrs_from_start'] = abs((stay_weights['start_timestamp'] - stay_weights['starttime']).dt.total_seconds() / 3600)
     stay_weights = stay_weights[stay_weights['patientweight'].between(WEIGHT_MIN, WEIGHT_MAX)]
     idx = stay_weights.groupby('stay_id')['hrs_from_start'].idxmin()
-    result = stay_weights.loc[idx][['stay_id', 'weight_kg']]
+    result = stay_weights.loc[idx][['stay_id', 'patientweight']]
+    result = result.rename(columns={'patientweight': 'weight_kg'})
 
     # weight_per_stay = (
     #     stay_weights
