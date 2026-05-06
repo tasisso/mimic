@@ -6,9 +6,9 @@ def load_config(path='../configs/config.yaml'):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
-def load_tbl(filename, source, dirs):
+def load_tbl(filename, source, dirs, **kwargs):
     path = get_path(filename, source, dirs)
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, **kwargs)
     df.columns = df.columns.str.lower() #mimic3 columns are all caps
     return df
 
@@ -31,7 +31,7 @@ def get_path(filename, source, dirs):
 
 def build_dirs(config, mimic):
     '''build directory lookup dict from config'''
-    clinical_root = config['paths'][f'mimic{mimic}_clinical_root']
+    clinical_root = config['paths'][mimic]['clinical_root']
     
     if mimic == 3:
         icu_dir = hosp_dir = clinical_root
@@ -43,5 +43,5 @@ def build_dirs(config, mimic):
         'derived': config['paths']['derived'],
         'icu': icu_dir,
         'hosp': hosp_dir,
-        'waveforms': config['paths'][f'mimic{mimic}_waveforms_root']
+        'waveforms': config['paths'][mimic]['waveforms_root']
     }

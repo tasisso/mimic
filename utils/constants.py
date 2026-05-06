@@ -9,6 +9,7 @@ SIGNAL_VARIANTS = {
     'ABP':   ['ABP', 'ART'],
     'PLETH': ['PLETH', 'PLETH L', 'PLETH R', 'PLETHl', 'PLETHr', 'PLTHPR', 'Pleth'],
     'AVR':   ['AVR', 'aVR'],
+    'AVL': ['AVL', 'aVL'],
     'I':     ['I'],
     'II':    ['II'],
     'III':   ['III'],
@@ -17,6 +18,7 @@ SIGNAL_VARIANTS = {
     'RESP':  ['RESP', 'Resp'],
     'PAP':   ['PAP'],
     'CVP':   ['CVP'],
+    'ICP': ['ICP'],
 }
 
 SIGNAL_NAME_MAP = {
@@ -27,9 +29,11 @@ SIGNAL_NAME_MAP = {
 
 TARGET_SIGNALS = list(SIGNAL_VARIANTS.keys())
 
-FINAL_SIGNALS = ['ii', 'pleth']
+#All records to include 
+FINAL_SIGNALS = ['II', 'PLETH', 'ABP']
 
 MIN_SIGNAL_HRS = 0.5
+TARGET_FS = 125.0
 
 
 #EHR
@@ -37,121 +41,296 @@ WEIGHT_ITEMIDS = [580, 581, 733, 763, 3580, 3581, 3582, 3583, 3692, 3693, 3723, 
 WEIGHT_MIN = 20 
 WEIGHT_MAX = 500 #kg
 
-LAB_LABELS = ['Potassium', 'Sodium', 'Chloride', 'Hematocrit', 'Glucose',
+# labs
+LAB_MAP = {
+    "Hematocrit": "hematocrit",
+    "Platelet Count": "platelets",
+    "Creatinine": "creatinine",
+    "Potassium": "potassium",
+    "Hemoglobin": "hemoglobin",
+    "White Blood Cells": "wbc",
+    "MCHC": "mchc",
+    "Red Blood Cells": "rbc",
+    "MCV": "mcv",
+    "MCH": "mch",
+    "RDW": "rdw",
+    "Urea Nitrogen": "bun",
+    "Sodium": "sodium",
+    "Chloride": "chloride",
+    "Bicarbonate": "bicarbonate",
+    "Anion Gap": "anion_gap",
+    "Glucose": "glucose",
+    "Magnesium": "magnesium",
+    "Calcium, Total": "calcium",
+    "Phosphate": "phosphate",
+    "INR(PT)": "inr",
+    "PT": "pt",
+    "PTT": "ptt",
+    "Basophils": "basophils",
+    "Neutrophils": "neutrophils",
+    "Monocytes": "monocytes",
+    "Eosinophils": "eosinophils",
+    "Lymphocytes": "lymphocytes",
+    "RDW-SD": "rdw_sd",
+    "H": "h",
+    "L": "l",
+    "I": "i",
+    "Alanine Aminotransferase (ALT)": "alt",
+    "Asparate Aminotransferase (AST)": "ast",
+    "Lactate": "lactate",
+    "Alkaline Phosphatase": "alp",
+    "Bilirubin, Total": "bilirubin",
+    "pH": "ph",
+    "Albumin": "albumin",
+    "Base Excess": "base_excess",
+    "pO2": "po2",
+    "Calculated Total CO2": "tco2",
+    "pCO2": "pco2",
+    "Absolute Neutrophil Count": "anc",
+    "Absolute Eosinophil Count": "aec",
+    "Absolute Monocyte Count": "amc",
+    "Absolute Basophil Count": "abc",
+    "Absolute Lymphocyte Count": "alc",
+    "Creatine Kinase (CK)": "ck",
+    "Immature Granulocytes": "ig"
+}
+
+TOP_20_LABS = ['Potassium', 'Sodium', 'Chloride', 'Hematocrit', 'Glucose',
        'Creatinine', 'Urea Nitrogen', 'Bicarbonate', 'Anion Gap', 'Hemoglobin',
        'Platelet Count', 'White Blood Cells', 'Red Blood Cells', 'MCH', 'RDW',
        'MCHC', 'MCV', 'Magnesium', 'Phosphate', 'Calcium, Total']
 
-INPUT_LABELS = []
+LAB_LABELS = list(LAB_MAP.keys())
 
-vasopressors_cv = [
-    'Levophed-k', 'Levophed',                          # norepinephrine
-    'Epinephrine-k',                                    # epinephrine
-    'Dopamine',                                         # dopamine
-    'Neosynephrine-k', 'Neosynephrine',                # phenylephrine
-    'Vasopressin',                                      # vasopressin
-    'Sandostatin', 'OCTREOTIDE',                        # octreotide
-]
+# inputs
+MEDS = {
+    # VASOPRESSORS
+    'norepinephrine': {
+        'category': 'vasopressor',
+        'variants': ['Levophed-k', 'Levophed', 'Norepinephrine'],
+    },
+    'epinephrine': {
+        'category': 'vasopressor',
+        'variants': ['Epinephrine-k', 'Epinephrine'],
+    },
+    'dopamine': {
+        'category': 'vasopressor',
+        'variants': ['Dopamine', 'Dopamine Drip'],
+    },
+    'phenylephrine': {
+        'category': 'vasopressor',
+        'variants': ['Neosynephrine-k', 'Neosynephrine', 'Phenylephrine',
+                     'Phenylephrine (50/250)', 'Phenylephrine (200/250)'],
+    },
+    'vasopressin': {
+        'category': 'vasopressor',
+        'variants': ['Vasopressin'],
+    },
+    'octreotide': {
+        'category': 'vasopressor',
+        'variants': ['Sandostatin', 'OCTREOTIDE', 'Octreotide', 'octreotide'],
+    },
+    'isoproterenol': {
+        'category': 'vasopressor',
+        'variants': ['Isuprel'],
+    },
 
-inotropes_cv = [
-    'Milrinone',                                        # milrinone
-    'Dobutamine',                                       # dobutamine
-    'Amrinone',                                         # amrinone
-    'Aminophylline',                                    # aminophylline
-]
+    # INOTROPES
+    'milrinone': {
+        'category': 'inotrope',
+        'variants': ['Milrinone'],
+    },
+    'dobutamine': {
+        'category': 'inotrope',
+        'variants': ['Dobutamine'],
+    },
+    'amrinone': {
+        'category': 'inotrope',
+        'variants': ['Amrinone'],
+    },
+    'aminophylline': {
+        'category': 'inotrope',
+        'variants': ['Aminophylline'],
+    },
+    'atropine': {
+        'category': 'inotrope',
+        'variants': ['Atropine'],
+    },
 
-vasodilators_cv = [
-    'Nitroprusside',                                    # nitroprusside
-    'Nitroglycerine-k', 'Nitroglycerine',              # nitroglycerin
-    'Nicardipine', 'nicardipine gtt',                  # nicardipine
-    'Labetolol',                                        # labetalol
-    'Diltiazem',                                        # diltiazem
-    'Esmolol',                                          # esmolol
-    'Natrecor',                                         # nesiritide
-    'FLOLAN',                                           # epoprostenol
-    'Prostaglandin',                                    # prostaglandin
-]
+    # VASODILATORS
+    'nitroprusside': {
+        'category': 'vasodilator',
+        'variants': ['Nitroprusside'],
+    },
+    'nitroglycerin': {
+        'category': 'vasodilator',
+        'variants': ['Nitroglycerine-k', 'Nitroglycerine', 'Nitroglycerin'],
+    },
+    'nicardipine': {
+        'category': 'vasodilator',
+        'variants': ['Nicardipine', 'nicardipine gtt', 'Nicardipine 40mg/200'],
+    },
+    'labetalol': {
+        'category': 'vasodilator',
+        'variants': ['Labetolol', 'Labetalol'],
+    },
+    'diltiazem': {
+        'category': 'vasodilator',
+        'variants': ['Diltiazem'],
+    },
+    'esmolol': {
+        'category': 'vasodilator',
+        'variants': ['Esmolol'],
+    },
+    'nesiritide': {
+        'category': 'vasodilator',
+        'variants': ['Natrecor', 'Nesiritide'],
+    },
+    'epoprostenol': {
+        'category': 'vasodilator',
+        'variants': ['FLOLAN'],
+    },
+    'prostaglandin': {
+        'category': 'vasodilator',
+        'variants': ['Prostaglandin'],
+    },
+    'metoprolol': {
+        'category': 'vasodilator',
+        'variants': ['Metoprolol'],
+    },
+    'hydralazine': {
+        'category': 'vasodilator',
+        'variants': ['Hydralazine'],
+    },
+    'verapamil': {
+        'category': 'vasodilator',
+        'variants': ['Verapamil'],
+    },
+    'angiotensin_ii': {
+        'category': 'vasodilator',
+        'variants': ['Angiotensin II (Giapreza)'],
+    },
+    'furosemide': {
+        'category': 'vasodilator',
+        'variants': ['Furosemide (Lasix)', 'Lasix'],
+    },
+    'fenoldopam': {
+        'category': 'vasodilator',
+        'variants': ['FENOLDOPAM 10MG/250C', 'Fendolapam'], 
+    },
 
-antiarrhythmics_cv = [
-    'Amiodarone',                                       # amiodarone
-    'Lidocaine',                                        # lidocaine
-    'Procainamide',                                     # procainamide
-]
+    # ANTIARRHYTHMICS
+    'amiodarone': {
+        'category': 'antiarrhythmic',
+        'variants': ['Amiodarone', 'Amiodarone 600/500', 'Amiodarone 450/250'],
+    },
+    'lidocaine': {
+        'category': 'antiarrhythmic',
+        'variants': ['Lidocaine'],
+    },
+    'procainamide': {
+        'category': 'antiarrhythmic',
+        'variants': ['Procainamide'],
+    },
+    'adenosine': {
+        'category': 'antiarrhythmic',
+        'variants': ['Adenosine'],
+    },
 
-sedatives_cv = [
-    'Propofol',                                         # propofol
-    'Fentanyl', 'Fentanyl (Conc)', 'Fentanyl Base',   # fentanyl
-    'Midazolam',                                        # midazolam
-    'Ativan',                                           # lorazepam
-    'Morphine Sulfate',                                 # morphine
-    'Dilaudid',                                         # hydromorphone
-    'Precedex',                                         # dexmedetomidine
-    'Pentobarbitol',                                    # pentobarbital
-    'demerol',                                          # meperidine
-    'Epidural', 'epidural',                             # epidural
-    'bupivacaine',                                      # bupivacaine
-]
+    # SEDATIVES & ANALGESICS
+    'propofol': {
+        'category': 'sedative_analgesic',
+        'variants': ['Propofol'],
+    },
+    'fentanyl': {
+        'category': 'sedative_analgesic',
+        'variants': ['Fentanyl', 'Fentanyl (Conc)', 'Fentanyl Base', 'Fentanyl (Concentrate)', 'Fentanyl Drip'],
+    },
+    'midazolam': {
+        'category': 'sedative_analgesic',
+        'variants': ['Midazolam', 'Midazolam (Versed)'],
+    },
+    'lorazepam': {
+        'category': 'sedative_analgesic',
+        'variants': ['Ativan', 'Lorazepam (Ativan)'],
+    },
+    'morphine': {
+        'category': 'sedative_analgesic',
+        'variants': ['Morphine Sulfate'],
+    },
+    'hydromorphone': {
+        'category': 'sedative_analgesic',
+        'variants': ['Dilaudid', 'Hydromorphone (Dilaudid)'],
+    },
+    'dexmedetomidine': {
+        'category': 'sedative_analgesic',
+        'variants': ['Precedex', 'Dexmedetomidine (Precedex)', 'Precedex (mcg/kg/hr)', 'PRECEDEX CC/HR'],
+    },
+    'pentobarbital': {
+        'category': 'sedative_analgesic',
+        'variants': ['Pentobarbitol'],
+    },
+    'meperidine': {
+        'category': 'sedative_analgesic',
+        'variants': ['demerol', 'Meperidine (Demerol)'],
+    },
+    'ketamine': {
+        'category': 'sedative_analgesic',
+        'variants': ['Ketamine'],
+    },
+    'methadone': {
+        'category': 'sedative_analgesic',
+        'variants': ['Methadone Hydrochloride'],
+    },
+    'diazepam': {
+        'category': 'sedative_analgesic',
+        'variants': ['Diazepam (Valium)'],
+    },
+    'haloperidol': {
+        'category': 'sedative_analgesic',
+        'variants': ['Haloperidol (Haldol)'],
+    },
+    'bupivacaine': {
+        'category': 'sedative_analgesic',
+        'variants': ['bupivacaine'],
+    },
+    'epidural': {
+        'category': 'sedative_analgesic',
+        'variants': ['Epidural', 'epidural'],
+    },
+    'acetaminophen_iv': {
+        'category': 'sedative_analgesic',
+        'variants': ['Acetaminophen-IV'],
+    },
+    # NEUROMUSCULAR BLOCKERS
+    'cisatracurium': {
+        'category': 'nm_blocker',
+        'variants': ['Cisatracurium', 'CISATRICURIUM', 'cisatricurium',
+                    'Cisat mcg/kg/hr', 'Cisat mcg/kg/min', 'NIMBEX', 'nimbex'],
+    },
+    'vecuronium': {
+        'category': 'nm_blocker',
+        'variants': ['Vecuronium'],
+    },
+    'pancuronium': {
+        'category': 'nm_blocker',
+        'variants': ['Pancuronium'],
+    },
+    'atracurium': {
+        'category': 'nm_blocker',
+        'variants': ['Atracurium'],
+    },
+    'doxacurium': {
+        'category': 'nm_blocker',
+        'variants': ['Doxacurium'],
+    },
+}
 
-hemodynamic_cv = list(set(
-    vasopressors_cv + inotropes_cv + vasodilators_cv + 
-    antiarrhythmics_cv + sedatives_cv
-))
-
-#inputs_mv
-vasopressors_mv = [
-    'Norepinephrine',                                   # norepinephrine
-    'Epinephrine',                                      # epinephrine
-    'Dopamine',                                         # dopamine
-    'Phenylephrine',                                    # phenylephrine
-    'Vasopressin',                                      # vasopressin
-    'Octreotide',                                       # octreotide'
-]
-
-inotropes_mv = [
-    'Milrinone',                                        # milrinone
-    'Dobutamine',                                       # dobutamine
-    'Atropine',                                         # atropine
-]
-
-vasodilators_mv = [
-    'Nitroprusside',                                    # nitroprusside
-    'Nitroglycerin',                                    # nitroglycerin
-    'Nicardipine',                                      # nicardipine
-    'Labetalol',                                        # labetalol
-    'Metoprolol',                                       # metoprolol
-    'Diltiazem',                                        # diltiazem
-    'Esmolol',                                          # esmolol
-    'Hydralazine',                                      # hydralazine
-    'Verapamil',                                        # verapamil
-    'Nesiritide',                                       # nesiritide
-]
-
-antiarrhythmics_mv = [
-    'Amiodarone', 'Amiodarone 600/500',                # amiodarone
-    'Lidocaine',                                        # lidocaine
-    'Procainamide',                                     # procainamide
-    'Adenosine',                                        # adenosine
-    'Diltiazem',                                        # diltiazem (dual use)
-    'Esmolol',                                          # esmolol (dual use)
-    'Verapamil',                                        # verapamil (dual use)
-]
-
-sedatives_mv = [
-    'Propofol',                                         # propofol
-    'Fentanyl', 'Fentanyl (Concentrate)',              # fentanyl
-    'Midazolam (Versed)',                               # midazolam
-    'Lorazepam (Ativan)',                               # lorazepam
-    'Morphine Sulfate',                                 # morphine
-    'Hydromorphone (Dilaudid)',                         # hydromorphone
-    'Dexmedetomidine (Precedex)',                       # dexmedetomidine
-    'Ketamine',                                         # ketamine
-    'Meperidine (Demerol)',                             # meperidine
-    'Methadone Hydrochloride',                          # methadone
-    'Diazepam (Valium)',                                # diazepam
-    'Haloperidol (Haldol)',                             # haloperidol
-]
-
-hemodynamic_mv = list(set(
-    vasopressors_mv + inotropes_mv + vasodilators_mv +
-    antiarrhythmics_mv + sedatives_mv
-))
+# flat lookup: raw label → (normalized_name, category)
+MED_MAP = {
+    variant: (name, entry['category'])
+    for name, entry in MEDS.items()
+    for variant in entry['variants']
+}
+MED_CATEGORIES = ['vasopressor', 'vasodilator', 'inotrope', 'antiarrhythmic', 'sedative_analgesic']
+INPUT_LABELS = list(MED_MAP.keys())
