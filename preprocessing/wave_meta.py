@@ -14,22 +14,22 @@ def get_physionet_dirs(physionet_dir):
 
 def format_meta(df, signals):
     # convert sample counts to recording hours and clean up column typing
-    df.rename(columns={'which_mimic': 'mimic'})
+    df = df.rename(columns={'which_mimic': 'mimic'})
     int_cols = ['mimic'] + [col for col in df.columns if col.endswith('id')]
     for col in int_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int32')
+        df[col] = pd.to_numeric(df[col]).astype('Int32')
 
     #convert n_samples to signal hours
     sample_cols = [col for col in df.columns if col.endswith('_samples')]
     for col in sample_cols:
         hr_col = col.replace('_samples', '_hrs')
-        df[hr_col] = (df[col] / df['fs'] / 3600).round(2)
+        df[hr_col] = (df[col] / df['fs'] / 3600).round(1)
 
     df['start_timestamp'] = pd.to_datetime(df['start_timestamp'])
     df['end_timestamp'] = df['start_timestamp'] + pd.to_timedelta(df['record_len'] / df['fs'], unit='s')
-    df['record_hrs'] = (df['record_len'] / df['fs'] / 3600).round(2)
+    df['record_hrs'] = (df['record_len'] / df['fs'] / 3600).round(1)
 
-    df = df[int_cols + ['start_timestamp', 'end_timestamp', 'record_hrs', 'total_hrs'] + [f'{signal}_hrs' for signal in signals]]
+    df = df[int_cols + ['fs', 'start_timestamp', 'end_timestamp', 'record_hrs'] + [col for col in df.columns if col.endswith('_hrs')]]
 
     return df
 

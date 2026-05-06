@@ -5,7 +5,11 @@ from utils.utils import load_tbl
 def get_stay_weight(dirs, cohort):
     mimic = cohort['mimic'].iloc[0]
     if mimic == 3:
-        weight_events = load_tbl('weightevents_mimic3.csv', source='derived', dirs=dirs)
+        weight_events = load_tbl('weight_events.csv', source='derived', dirs=dirs)
+        d_items = load_tbl('D_ITEMS.csv.gz', source='icu', dirs=dirs)
+        weight_events = weight_events.merge(d_items[['itemid', 'label']],
+                                            how='inner',
+                                            on='itemid')
         stay_weights = get_weights_from_charts(cohort, weight_events)
         stay_key = 'icustay_id'
     elif mimic == 4:
@@ -56,11 +60,11 @@ def get_weights_from_charts(icustays, weight_events):
     return result
 
 def get_weights_from_inputs(icustays, inputs):
-    inputs = inputs[['subject_id', 'hadm_id', 'stay_id', 'patientweight', 'starttime']].drop_duplicates(subset=['patientweight'])
+    inputs = inputs[['subject_id', 'hadm_id', 'stay_id', 'patientweight', 'starttime']]
+    inputs = inputs[inputs['patientweight'].notna()]
     stay_weights = inputs.merge(icustays,
                                 on=['subject_id', 'hadm_id', 'stay_id'],
                                 how='inner')
-    
     stay_weights['starttime'] = pd.to_datetime(stay_weights['starttime'])
     stay_weights['hrs_from_start'] = abs((stay_weights['start_timestamp'] - stay_weights['starttime']).dt.total_seconds() / 3600)
     stay_weights = stay_weights[stay_weights['patientweight'].between(WEIGHT_MIN, WEIGHT_MAX)]

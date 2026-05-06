@@ -24,32 +24,32 @@ def load_labs(dirs, cohort, chunksize=200000):
 
 def match_labs(labs, cohort):
     '''match labs to waveform windows'''
-    
-    admission_labs = labs.merge(
+    buffer = pd.Timedelta(hours=2.0)
+    admission_labs = labs[['subject_id', 'hadm_id', 'itemid', 'label', 'charttime', 'valuenum', 'valueuom', 'flag']].merge(
         cohort[['subject_id', 'hadm_id', 'record_id', 'start_timestamp', 'end_timestamp']],
         how='inner',
         on=['subject_id', 'hadm_id']
     )
+    admission_labs['hadm_id'] = admission_labs['hadm_id'].astype(int)
+
     admission_labs['charttime'] = pd.to_datetime(admission_labs['charttime'])
     
     #Charted within the waveform window -> match to stay
     stay_labs = admission_labs[
-        (admission_labs['charttime'] >= admission_labs['start_timestamp']) &
+        (admission_labs['charttime'] + buffer >= admission_labs['start_timestamp']) &
         (admission_labs['charttime'] < admission_labs['end_timestamp'])
     ]
     return stay_labs
 
 def filter_labs(matched_labs, labels=LAB_LABELS):
     '''Filter to cohort to those having ALL labels within icustay '''
-    record_labflags = (matched_labs[matched_labs['label'].isin(labels)]
-        .assign(present=lambda x: x['valuenum'].notna().astype(int))
-        .pivot_table(index='record_id', columns='label', values='present', aggfunc='max', fill_value=0)
-        .reset_index())   
-    records_with_all_labs = record_labflags[record_labflags[labels].eq(1).all(axis=1)]
+    # record_labflags = (matched_labs[matched_labs['label'].isin(labels)]
+    #     .assign(present=lambda x: x['valuenum'].notna().astype(int))
+    #     .pivot_table(index='record_id', columns='label', values='present', aggfunc='max', fill_value=0)
+    #     .reset_index())   
+    # records_with_all_labs = list(record_labflags[record_labflags[labels].eq(1).all(axis=1)]['record_id'])
 
-    return matched_labs.merge(records_with_all_labs,
-                               on='record_id',
-                               how='inner')
+    return matched_labs[matched_labs['label'].isin(labels)]
 
 def get_labs(dirs, cohort):
 
