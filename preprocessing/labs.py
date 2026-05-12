@@ -23,8 +23,11 @@ def load_labs(dirs, cohort, chunksize=200000):
     return pd.concat(kept_rows, ignore_index=True)
 
 def match_labs(labs, cohort):
-    '''match labs to waveform windows'''
-    buffer = pd.Timedelta(hours=2.0)
+    '''
+    Match labs to waveform windows,
+    includes a 12 hour buffer before waveform start
+    '''
+    buffer = pd.Timedelta(hours=12.0)
     admission_labs = labs[['subject_id', 'hadm_id', 'itemid', 'label', 'charttime', 'valuenum', 'valueuom', 'flag']].merge(
         cohort[['subject_id', 'hadm_id', 'record_id', 'start_timestamp', 'end_timestamp']],
         how='inner',
@@ -36,7 +39,7 @@ def match_labs(labs, cohort):
     
     #Charted within the waveform window -> match to stay
     stay_labs = admission_labs[
-        (admission_labs['charttime'] + buffer >= admission_labs['start_timestamp']) &
+        (admission_labs['charttime'] >= admission_labs['start_timestamp'] - buffer) &
         (admission_labs['charttime'] < admission_labs['end_timestamp'])
     ]
     return stay_labs

@@ -39,7 +39,10 @@ def load_inputs(dirs, mimic):
     return inputs
 
 def match_inputs(inputs, cohort):
-    '''match labs to waveform windows'''
+    '''
+    Match inputs to waveform window, 
+    includes a 2 hour buffer before waveform start
+    '''
     buffer = pd.Timedelta(hours=2.0)
     mimic = cohort['mimic'].iloc[0]
     if mimic == 3:
@@ -55,8 +58,8 @@ def match_inputs(inputs, cohort):
     
     #Overlapping with the waveform window
     return stay_inputs[
-        (stay_inputs['start_timestamp'] < stay_inputs['endtime'] + buffer) &
-        (stay_inputs['end_timestamp'] > stay_inputs['starttime'])
+        (stay_inputs['start_timestamp'] < stay_inputs['endtime']) &
+        (stay_inputs['end_timestamp'] > stay_inputs['starttime'] - buffer)
     ]
 
 def filter_inputs(inputs, labels=INPUT_LABELS):
@@ -80,7 +83,7 @@ def format_cv(df):
     Handles two route types:
         - IV Drip: reconstruct continuous intervals from charttimes
         - Intravenous Push: reconstruct intervals from consecutive row amounts
-            Note: Requires full inputs_cv for get_elapsed_row0
+            Note: Requires unfiltered inputs_cv for get_elapsed_row0
     '''
     df = preprocess_cv(df)
     intervals = []
@@ -162,7 +165,7 @@ def get_elapsed_row0(run, icustay_id, all_pushes):
     first_charttime = run['charttime'].iloc[0]
 
     # 1) Consistent interval in rest of run —> inherit
-    if len(run) >= 3 and run['elapsed_min'].iloc[1] == run['elapsed_min'].iloc[2]:
+    if run['elapsed_min'].iloc[1] == run['elapsed_min'].iloc[2]:
         return run['elapsed_min'].iloc[1]
 
     # 2) Prior push charttime available
@@ -188,24 +191,24 @@ def compute_push_run_rates(run, icustay_id, all_pushes):
 
 
 def push_intervals(df):
-    intervals  = []
-    labels_set = set(INPUT_LABELS)
-    all_pushes = (df[df['originalroute'] == 'Intravenous Push']
-                  [['icustay_id', 'charttime']]
-                  .drop_duplicates())
-
-    pushes = df[
-        (df['originalroute'] == 'Intravenous Push') &
-        (df['label'].isin(labels_set))
-    ].copy()
-
-    for (icustay_id, itemid), group in pushes.groupby(['icustay_id', 'itemid']):
+    df = df.sort_values(['icustay_id', 'itemid', 'charttime']).copy().drop_duplicates(subset=[
+    'icustay_id', 'itemid', 'charttime', 'storetime', 
+    'cgid', 'amount', 'rate'])
+    df['charttime'] = pd.to_datetime(df['charttime'])
+    
+    # Build lookup of previous push charttime across all labels per icustay
+    all_pushes = df[df['originalroute'] == 'Intravenous Push'][['icustay_id', 'charttime']].drop_duplicates()
+    
+    intervals = []
+    for (icustay_id, itemid), group in df.groupby(['icustay_id', 'itemid']):
+        if not group['label'].isin(INPUT_LABELS).any():
+            continue
         group['run_id'] = (
             group['originalroute'] != group['originalroute'].shift()
         ).fillna(False).cumsum()
 
         for run_id, run in group.groupby('run_id'):
-            if len(run) < 3:
+            if run['originalroute'].iloc[0] != 'Intravenous Push' or len(run) < 3:
                 continue
             run = run[run['amount'].fillna(0) > 0]
             if len(run) < 3:
@@ -222,7 +225,7 @@ def push_intervals(df):
                     row['charttime'],
                     row['rate'], row['rateuom'],
                     row['amount'], row['amountuom'],
-                    'Continuous Med'
+                    'Continuous IV'
                 ))
 
     return intervals

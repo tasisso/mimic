@@ -50,7 +50,7 @@ def filter_icd(icd):
 def get_icd(config, dirs, cohort):
     mimic = cohort['mimic'].iloc[0]
     gem_dir = config['paths']['gem']
-    mimic4_root = config['paths'][f'mimic4_clinical_root']
+    mimic4_root = config['paths']['mimic4']['clinical_root']
 
     # Load and match respective mimic icd
     icd = load_tbl('DIAGNOSES_ICD.csv.gz', source='hosp', dirs=dirs)
