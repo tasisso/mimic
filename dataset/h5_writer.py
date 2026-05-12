@@ -58,22 +58,28 @@ class H5ChunkWriter:
         target_signals  : all signals the pipeline cares about (for has_{signal} attrs)
         record_signals  : signals actually present in this record's layout header
         """
-        self.subject_id = subject_id
-        self.hadm_id    = hadm_id
-        self.stay_id    = stay_id
-        self.record_id  = record_id
+
+        self.filepath = f"{output_dir}/{subject_id}_{hadm_id}_{stay_id}_{record_id}.h5"
+        self._h5 = h5py.File(self.filepath, 'a')
+
         self.chunk_size    = chunk_size
         self.total_chunks  = total_chunks
-        self.target_signals = target_signals
-        self.record_signals = record_signals
 
-        self.filepath = f"{output_dir}/{subject_id}_{stay_id}_{record_id}.h5"
-        self._h5       = h5py.File(self.filepath, "a")
-        self._group    = self._make_group()
+        # Root attrs
+        self._h5.attrs['subject_id'] = subject_id
+        self._h5.attrs['hadm_id']    = hadm_id
+        self._h5.attrs['stay_id']    = stay_id
+        self._h5.attrs['record_id']  = record_id
 
-        self._waveform_datasets: dict[str, h5py.Dataset] = {}
-        self._timestamps_dataset: h5py.Dataset | None = None
-        self._ehr_dataset: h5py.Dataset | None = None
+        record_signal_set = set(record_signals)
+        for sig in target_signals:
+            self._h5.attrs[f'has_{sig}'] = int(sig in record_signal_set)
+        
+        self._group = self._h5['data'] if 'data' in self._h5 else self._h5.create_group('data')
+
+        self._waveform_datasets = {}
+        self._timestamps_dataset = None
+        self._ehr_dataset = None
 
         self._init_datasets()
 
@@ -92,20 +98,13 @@ class H5ChunkWriter:
         signal_data: np.ndarray,        # (chunk_size, n_signals)
         signal_map: dict[str, int],     # signal_name -> column index in signal_data
         ehr_dict: dict[str, float],     # feature_name -> scalar (may be NaN)
-    ) -> None:
-        """
-        Write one chunk. All arrays must already be resampled, aligned, and padded
-        to exactly self.chunk_size rows before calling this.
-        """
+    ):
+        
         self._write_waveforms(chunk_id, signal_data, signal_map)
         self._write_timestamp(chunk_id, timestamp)
         self._write_ehr(chunk_id, ehr_dict)
     
     def write_static(self, codes: list, demographics: dict = None):
-        """
-        Write static per-stay features as group attributes.
-        Called once per record, not per chunk.
-        """
         
         self._group.attrs['codes'] = codes
         
@@ -113,33 +112,12 @@ class H5ChunkWriter:
             for key, value in demographics.items():
                 self._group.attrs[key] = value
 
-    def close(self) -> None:
+    def close(self):
         if self._h5.id.valid:
             self._h5.flush()
             self._h5.close()
 
-    #Inits
-    def _make_group(self) -> h5py.Group:
-        group_name = f"{self.subject_id}_{self.stay_id}_{self.record_id}"
-        
-        if group_name not in self._h5:
-            g = self._h5.create_group(group_name)
-        else:
-            g = self._h5[group_name]
-
-        g.attrs['subject_id'] = self.subject_id
-        g.attrs['hadm_id']    = self.hadm_id
-        g.attrs['stay_id']    = self.stay_id
-        g.attrs['record_id']  = self.record_id
-
-        record_signal_set = set(self.record_signals)
-        for sig in self.target_signals:
-            g.attrs[f'has_{sig}'] = int(sig in record_signal_set)
-
-        return g
-
     def _init_datasets(self) -> None:
-        """Create all datasets up front with known shapes. Called once in __init__."""
         
         self._init_waveform_datasets()
         self._init_timestamp_dataset()
@@ -181,8 +159,9 @@ class H5ChunkWriter:
                 dtype=ehr_dtype,
                 compression="gzip",
             )
-            # HDF5 defaults to 0 for everything -> fix float fields to NaN
-            empty = np.zeros(self.total_chunks, dtype=ehr_dtype)
+            # HDF5 defaults to 0 for everything -> fix float fields to NaN, flags to -1
+        
+            empty = np.full(self.total_chunks, -1, dtype=ehr_dtype)
             for field, (dtype, _) in ehr_dtype.fields.items():
                 if np.issubdtype(dtype, np.floating):
                     empty[field] = np.nan
@@ -208,20 +187,24 @@ class H5ChunkWriter:
         """
         Write scalar EHR values for one chunk.
         - float32 fields: stored as-is (NaN preserved)
-        - int32 fields:   NaN -> 0
+        - int32 fields: NaN -> -1
         """
         row = self._ehr_dataset[chunk_id]
         valid_keys = set(row.dtype.names)
 
         for key, value in ehr_dict.items():
             if key not in valid_keys:
-                print(key)
                 continue
             field_dtype = row.dtype.fields[key][0]
             if np.issubdtype(field_dtype, np.floating):
                 self._ehr_dataset[key, chunk_id] = value
             else:
-                self._ehr_dataset[key, chunk_id] = value if pd.notna(value) else 0
+                if pd.isna(value):
+                    # NaN int -> -1 means drug never present in stay
+                    self._ehr_dataset[key, chunk_id] = -1
+                else:
+                    # 0 = present but inactive, 1 = active
+                    self._ehr_dataset[key, chunk_id] = value
 
 
 def build_ehr_dtype() -> np.dtype:

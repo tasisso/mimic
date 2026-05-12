@@ -30,18 +30,18 @@ class MIMIC_EHR:
         return load_tbl(filename, source, self.dirs, **kwargs)
     
     def save(self):
-        path = self.dirs['derived']
-        self.inputs.to_csv(f'{path}mimic{self.mimic}_inputs.csv', index=False)
-        self.labs.to_csv(f'{path}mimic{self.mimic}_labs.csv', index=False)
-        self.icd.to_csv(f'{path}mimic{self.mimic}_icd.csv', index=False)
-        self.cohort.to_csv(f'{path}mimic{self.mimic}_cohort.csv', index=False)
+        path = self.config['paths']['derived']
+        self.inputs.to_csv(f'{path}/mimic{self.mimic}_inputs.csv', index=False)
+        self.labs.to_csv(f'{path}/mimic{self.mimic}_labs.csv', index=False)
+        self.icd.to_csv(f'{path}/mimic{self.mimic}_icd.csv', index=False)
+        self.cohort.to_csv(f'{path}/mimic{self.mimic}_cohort.csv', index=False)
 
 
     def preprocess(self, verbose=True):
         icustays = self._load('ICUSTAYS.csv.gz', source='icu')
         admissions = self._load('ADMISSIONS.csv.gz', source='hosp')
         patients = self._load('PATIENTS.csv.gz', source='hosp', )
-        wave_meta = self._load(f'wavemeta_mimic{self.mimic}.csv', index_col=0)
+        wave_meta = self._load(f'wavemeta{self.mimic}_form.csv', index_col=0)
         
         # 1) Match recordings to icustays 
         cohort = match_icustays(wave_meta, icustays)
@@ -84,52 +84,68 @@ class ehrExtractor:
         labs = labs.copy()
         labs['charttime'] = pd.to_datetime(labs['charttime'])
 
-        # Build indexes
+        #Build indexes
         self.inputs_by_stay = inputs.groupby('stay_id')
         self.labs_by_stay = labs.groupby(['subject_id', 'hadm_id'])
         self.codes_by_stay = codes.groupby(['subject_id', 'hadm_id'])
 
+        #Stay-level med presence
+        self._stay_meds_cache = {}
+        for stay_id, group in self.inputs_by_stay:
+            labels = set(group['label'].unique())
+            meds = set(
+                self.medication_map[l][0] for l in labels
+                if l in self.medication_map and self.medication_map[l]
+            )
+            cats = set(
+                self.medication_map[l][1] for l in labels
+                if l in self.medication_map and self.medication_map[l]
+            )
+            self._stay_meds_cache[stay_id] = (meds, cats)
+        #Stay-level lab presence
+        self._stay_labs_cache = {}
+        for (subject_id, hadm_id), group in self.labs_by_stay:
+            labels = set(group['label'].unique())
+            labs = set(
+                self.lab_map[l] for l in labels
+                if l in self.lab_map
+            )
+            self._stay_labs_cache[(subject_id, hadm_id)] = labs
+
     def get_features(self, subject_id, hadm_id, stay_id, patientweight, chunk_starttime):
         chunk_start = pd.Timestamp(chunk_starttime)
         chunk_end = chunk_start + pd.Timedelta(seconds=DEFAULT_CHUNK_DURATION)
+        stay_meds, stay_cats = self._stay_meds_cache.get(stay_id, (set(), set()))
 
-        #ehr = self._init_ehr()
+        ehr = self._init_ehr(stay_meds, stay_cats)
         ehr = self._fill_meds(ehr, stay_id, patientweight, chunk_start, chunk_end)
         ehr = self._fill_labs(ehr, subject_id, hadm_id, chunk_start, chunk_end)
         
         return ehr
 
-    # def _init_ehr(self, subject_id, hadm_id, stay_id) -> dict:
-    #     ehr = {}
-    #     try:
-    #         med_labels = self.inputs_by_stay.get_group(stay_id)['label'].unique()
-    #     except KeyError:
-    #         med_labels = []
-    #         print(f'No inputs of interest for this stay_id:{stay_id}')
-    #     stay_meds = set(
-    #         MED_MAP[label][0] for label in med_labels if label in MED_MAP
-    #     )
-    #     try:
-    #         lab_labels = self.labs_by_stay.gget_group((subject_id, hadm_id))['label'].unique()
-    #     except KeyError:
-    #         lab_labels = []
-    #         print(f'No labs of interest for this (subject,hadm):{(subject_id, hadm_id)}')
-    #     stay_labs = set(
-    #         MED_MAP[label][0] for label in lab_labels if label in LAB_MAP
-    #     )
-    #     for category in self.med_categories:
-    #         ehr[f'{category}_on'] = 0
-    #     for med in stay_meds:
-    #         ehr[f'{med}_ratenorm'] = np.nan
-    #         ehr[f'{med}_bolus'] = 0
-    #         ehr[f'{med}_on'] = 0
-    #     for lab in stay_labs:
-    #         ehr[lab] = np.nan
-        
-    #     #Derived 
-    #     ehr['norepi_eq'] = 0.0
-    #     ehr['vasoactive_on'] = 0
-    #     return ehr
+    def _init_ehr(self, stay_meds, stay_categories):
+        ehr = {}
+        for category in self.med_categories:
+            # 0 if drug in this category was given at some point, NaN if never
+            ehr[f'{category}_on'] = 0 if category in stay_categories else np.nan
+
+        for med in self.all_meds:
+            if med in stay_meds:
+                ehr[f'{med}_ratenorm'] = np.nan  
+                ehr[f'{med}_bolus'] = 0
+                ehr[f'{med}_on'] = 0
+            else:
+                # Drug never administered --> NaN to -1 in H5 for flags
+                ehr[f'{med}_ratenorm'] = np.nan
+                ehr[f'{med}_bolus'] = np.nan
+                ehr[f'{med}_on'] = np.nan
+
+        for lab in self.lab_map.values():
+            ehr[lab] = np.nan  # always NaN until measured
+
+        ehr['norepi_eq'] = np.nan
+        ehr['vasoactive_on'] = np.nan
+        return ehr
 
     def _fill_meds(self, ehr, stay_id, weight, chunk_start, chunk_end):
         try:
@@ -143,6 +159,8 @@ class ehrExtractor:
         ]
 
         for _, row in chunk_inputs.iterrows():
+            if not self.medication_map.get(row['label'], None):
+                print(row['label'])
             med_name, category = self.medication_map.get(row['label'])
             if not med_name:
                 continue
@@ -155,9 +173,8 @@ class ehrExtractor:
             #For titration, take maximum rate within chunk window
             if pd.notna(rate) and route in ('Continuous Med', 'Continuous IV'):
                 rate_norm = self.normalize_rate(rate, rateuom, weight)
-                if pd.notna(rate_norm):
-                    current = ehr[f'{med_name}_ratenorm']
-                    ehr[f'{med_name}_ratenorm'] = rate_norm if np.isnan(current) else max(current, rate_norm)
+                current = ehr.get(f'{med_name}_ratenorm', None)
+                ehr[f'{med_name}_ratenorm'] = rate_norm if not current else max(current, rate_norm)
 
             if pd.notna(amount) and route in ('Bolus', 'Drug Push'):
                 ehr[f'{med_name}_bolus'] = 1
@@ -196,7 +213,7 @@ class ehrExtractor:
         return present
 
     @staticmethod
-    def normalize_rate(self, rate, rate_uom, weight):
+    def normalize_rate(rate, rate_uom, weight):
         if pd.isna(rate) or pd.isna(weight):
             return np.nan
         conversions = {
@@ -227,10 +244,11 @@ class ehrExtractor:
         }
         norepi_eq = 0.0
         for drug, factor in NEE_FACTORS.items():
-            norepi_eq  += np.nan_to_num(ehr[f'{drug}_ratenorm'], nan=0.0) * factor
+            if f'{drug}_ratenorm' in ehr:
+                norepi_eq  += np.nan_to_num(ehr[f'{drug}_ratenorm'], nan=0.0) * factor
 
         ehr['norepi_eq']  = norepi_eq
-        if ehr['vasopressor_on'] or ehr['vasodilator_on']:
+        if ehr.get('vasopressor_on', None) or ehr.get('vasodilator_on', None):
             ehr['vasoactive_on'] = 1
 
         return ehr
