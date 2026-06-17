@@ -1,83 +1,115 @@
 import pandas as pd 
-from utils.constants import WEIGHT_ITEMIDS, WEIGHT_MAX, WEIGHT_MIN
+from utils.constants import WEIGHT_ITEMIDS, WEIGHT_MAX, WEIGHT_MIN, HEIGHT_ITEMIDS
 from utils.utils import load_tbl
 
-def get_stay_weight(dirs, cohort):
+def get_stay_weight_height(dirs, cohort):
     mimic = cohort['mimic'].iloc[0]
     if mimic == 3:
-        weight_events = load_tbl('weight_events.csv', source='derived', dirs=dirs)
-        d_items = load_tbl('D_ITEMS.csv.gz', source='icu', dirs=dirs)
-        weight_events = weight_events.merge(d_items[['itemid', 'label']],
-                                            how='inner',
-                                            on='itemid')
-        stay_weights = get_weights_from_charts(cohort, weight_events)
         stay_key = 'icustay_id'
+        chart_events = load_tbl('weight_height_events.csv', source='derived', dirs=dirs)
+        inputs = load_tbl('INPUTEVENTS_MV.csv.gz', source='icu', dirs=dirs)
+        
     elif mimic == 4:
-        inputs = load_tbl('INPUTEVENTS.csv.gz', source='icu', dirs=dirs)
-        stay_weights = get_weights_from_inputs(cohort, inputs)
         stay_key = 'stay_id'
-    result = cohort.merge(stay_weights, 
-                          how='left', 
-                          on=stay_key)
+        chart_events = load_tbl('weight_height_events.csv', source='derived', dirs=dirs)
+        inputs = load_tbl('inputevents.csv.gz', source='icu', dirs=dirs)
+
+    weights_inputs = get_weights_inputs(cohort, inputs, stay_key)
+    weights_charts = get_weights_charts(cohort, chart_events, stay_key)
+
+    # Combine: prioritize inputs, fall back to charts
+    stay_weights = (weights_inputs
+                    .merge(weights_charts[[stay_key, 'weight_kg']], 
+                           on=stay_key, 
+                           how='outer', 
+                           suffixes=('_inputs', '_charts'))
+    )
+    stay_weights['weight_kg'] = stay_weights['weight_kg_inputs'].fillna(stay_weights['weight_kg_charts'])
+    stay_weights = stay_weights[[stay_key, 'weight_kg']]
+
+    stay_heights = get_heights(cohort, chart_events, stay_key)
+
+    result = cohort.merge(stay_weights, how='left', on=stay_key)
+    result = result.merge(stay_heights[[stay_key, 'height_cm']], how='left', on=stay_key)
+
     return result
 
-def get_weightevents(charts_path):
-    #MIMIC-III only
-    chunks = []
-    for chunk in pd.read_csv(charts_path, 
-                             usecols = ['ITEMID', 'ICUSTAY_ID', 'CHARTTIME', 'VALUE', 'VALUENUM', 'VALUEUOM'], 
-                             chunksize=500000):
-        # filter immediately before concatenating
-        chunk = chunk[chunk['ITEMID'].isin(WEIGHT_ITEMIDS)]
-        chunks.append(chunk)
-    weight_events = pd.concat(chunks, ignore_index=True)
 
-    return weight_events
+def get_heights(icustays, chart_events, stay_key):
+    height_events = chart_events[chart_events['itemid'].isin(HEIGHT_ITEMIDS)]
 
-def get_weights_from_charts(icustays, weight_events):
-    df = icustays.merge(weight_events, on='icustay_id', how='inner')
-
+    df = icustays.merge(height_events, on=stay_key, how='inner')
+    df = df[df['valuenum'].notna() & (df['valuenum'] > 0)].copy()
+    #inch -> cm
+    inch_itemids = [920, 1394, 3486, 4187, 226707]
+    df.loc[df['itemid'].isin(inch_itemids), 'valuenum'] *= 2.54
+    
     df['charttime'] = pd.to_datetime(df['charttime'])
     df['hrs_from_start'] = abs(
         (df['start_timestamp'] - df['charttime']).dt.total_seconds() / 3600
     )
+
+    idx = df.groupby(stay_key)['hrs_from_start'].idxmin()
+    result = df.loc[idx][[stay_key, 'itemid', 'valuenum']]
+    result = result.rename(columns={'valuenum': 'height_cm'})
     
-    # filter valid weights and convert lbs to kg
-    df = df[df['valuenum'].notna()].copy()
-    df = df[df['label'].isin(['Previous WeightF', 'Daily Weight', 'Admission Weight (Kg)',
-       'Admission Weight (lbs.)', 'Previous Weight'
-       ])]
-    df.loc[df['label'] == 'Admission Weight (lbs.)', 'valuenum'] = (
-        df.loc[df['label'] == 'Admission Weight (lbs.)', 'valuenum'] * 0.453592
+    return result
+
+
+def get_weights_charts(icustays, chart_events, stay_key):
+    weight_events = chart_events[chart_events['itemid'].isin(WEIGHT_ITEMIDS)]
+
+    #convert lbs. -> kg
+    lbs_itemids = [226531]
+    weight_events = weight_events.copy()
+    weight_events.loc[weight_events['itemid'].isin(lbs_itemids), 'valuenum'] = (
+        weight_events.loc[weight_events['itemid'].isin(lbs_itemids), 'valuenum'] * 0.453592
+    ).round(1)
+
+    
+    df = icustays.merge(weight_events, on=stay_key, how='inner')
+    df = df[(df['valuenum'].notna()) & (df['valuenum'] != 1.0) & (df['valuenum'] > 0)].copy()
+    df['charttime'] = pd.to_datetime(df['charttime'])
+    df['hrs_from_start'] = abs(
+        (df['start_timestamp'] - df['charttime']).dt.total_seconds() / 3600
     )
-    df = df[df['valuenum'].between(WEIGHT_MIN, WEIGHT_MAX)]
+
     
     # select closest valid weight to waveform start per icustay
-    idx = df.groupby('icustay_id')['hrs_from_start'].idxmin()
-    result = df.loc[idx][['icustay_id', 'valuenum']]
+    idx = df.groupby(stay_key)['hrs_from_start'].idxmin()
+    result = df.loc[idx][[stay_key, 'itemid', 'valuenum']]
     result = result.rename(columns={'valuenum': 'weight_kg'})
     
     return result
 
-def get_weights_from_inputs(icustays, inputs):
-    inputs = inputs[['subject_id', 'hadm_id', 'stay_id', 'patientweight', 'starttime']]
-    inputs = inputs[inputs['patientweight'].notna()]
+def get_weights_inputs(icustays, inputs, stay_key):
+    inputs = inputs[['subject_id', 'hadm_id', stay_key, 'patientweight', 'starttime']].copy()
+    inputs = inputs[(inputs['patientweight'].notna()) & (inputs['patientweight'] != 1.0) & (inputs['patientweight'] > 0)]
     stay_weights = inputs.merge(icustays,
-                                on=['subject_id', 'hadm_id', 'stay_id'],
+                                on=['subject_id', 'hadm_id', stay_key],
                                 how='inner')
     stay_weights['starttime'] = pd.to_datetime(stay_weights['starttime'])
     stay_weights['hrs_from_start'] = abs((stay_weights['start_timestamp'] - stay_weights['starttime']).dt.total_seconds() / 3600)
-    stay_weights = stay_weights[stay_weights['patientweight'].between(WEIGHT_MIN, WEIGHT_MAX)]
-    idx = stay_weights.groupby('stay_id')['hrs_from_start'].idxmin()
-    result = stay_weights.loc[idx][['stay_id', 'patientweight']]
+    #stay_weights = stay_weights[stay_weights['patientweight'].between(WEIGHT_MIN, WEIGHT_MAX)]
+    idx = stay_weights.groupby(stay_key)['hrs_from_start'].idxmin()
+    result = stay_weights.loc[idx][[stay_key, 'patientweight']]
     result = result.rename(columns={'patientweight': 'weight_kg'})
 
-    # weight_per_stay = (
-    #     stay_weights
-    #     .sort_values('patientweight', ascending=False)
-    #     .groupby('stay_id')
-    #     .first()
-    #     .reset_index()
-    # )
     return result
-    
+
+def get_events(charts_path, stay_key):
+    chunks = []
+    cols = ['ITEMID', stay_key, 'CHARTTIME', 'VALUE', 'VALUENUM', 'VALUEUOM']
+    itemid = 'ITEMID'
+    if stay_key == 'stay_id':
+        cols = [c.lower() for c in cols]
+        itemid = itemid.lower()
+    for chunk in pd.read_csv(charts_path, 
+                             usecols = cols, 
+                             chunksize=500000):
+        # filter immediately before concatenating
+        chunk = chunk[chunk[itemid].isin(WEIGHT_ITEMIDS+HEIGHT_ITEMIDS)]
+        chunks.append(chunk)
+    result = pd.concat(chunks, ignore_index=True)
+
+    return result

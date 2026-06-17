@@ -37,7 +37,7 @@ def calculate_age(mimic, df):
             df['age'] = (df['anchor_age'] +
                     pd.to_datetime(df['admittime']).dt.year - df['anchor_year']).astype(int)
     df['age_group'] = pd.cut(df['age'], 
-                             bins=[0, 17, 25, 35, 45, 55, 65, 75, 85, np.inf], 
+                             bins=[-1, 17, 25, 35, 45, 55, 65, 75, 85, np.inf], 
                              labels=['<18', '18-25', '26-35', '36-45', '46-55', '56-65', '66-75', '76-85', '85>']
                              )
     return df

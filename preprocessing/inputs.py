@@ -21,7 +21,7 @@ def load_inputs(dirs, mimic):
         inputs_cv['dbsource'] = 'carevue'
 
         inputs_mv = load_tbl('INPUTEVENTS_MV.csv.gz', source='icu', dirs=dirs)
-        inputs_mv = inputs_cv.merge(d_inputs[['itemid', 'label']], 
+        inputs_mv = inputs_mv.merge(d_inputs[['itemid', 'label']], 
                                     how='inner', 
                                     on='itemid')
         inputs_mv = format_mv(inputs_mv, mimic)
@@ -55,6 +55,7 @@ def match_inputs(inputs, cohort):
         on=merge_key
     )
     stay_inputs['starttime'] = pd.to_datetime(stay_inputs['starttime'])
+    stay_inputs['endtime'] = pd.to_datetime(stay_inputs['endtime'])
     
     #Overlapping with the waveform window
     return stay_inputs[
