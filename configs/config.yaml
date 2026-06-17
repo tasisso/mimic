@@ -1,9 +1,28 @@
 paths:
-  mimic3_clinical_root: /u/project/jchiang/njchiang/data/physionet/mimic-iii-clinical-database-1.4
-  mimic4_clinical_root: /u/project/jchiang/njchiang/data/physionet/mimic-iv-2.2/mimic-iv-2.2
-  mimic3_waveforms_root: /path/to/waveforms
-  mimic4_waveforms_root:
-  derived: /u/project/jchiang/tsisson/mimic/data/derived
+  mimic3:
+    clinical_root: /u/project/jchiang/njchiang/data/physionet/mimic-iii-clinical-database-1.4
+    waveforms_root: /path/to/waveforms
+    cohort: /u/project/jchiang/tsisson/mimic/data/III/derived/cohort.csv
+    labs: /u/project/jchiang/tsisson/mimic/data/III/derived/labs.csv
+    inputs: /u/project/jchiang/tsisson/mimic/data/III/derived/inputs.csv
+    icd: /u/project/jchiang/tsisson/mimic/data/III/derived/icd.csv
+    output_dir: /u/project/jchiang/tsisson/mimic/data/III/h5
+    derived: /u/project/jchiang/tsisson/mimic/data/III/derived
+  mimic4:
+    clinical_root: /u/project/jchiang/njchiang/data/physionet/mimic-iv-2.2/mimic-iv-2.2
+    waveforms_root: /u/project/jchiang/akosruda/Waveforms/mimic4/physionet.org/files/mimic4wdb/0.1.0/waves
+    cohort: /u/project/jchiang/tsisson/mimic/data/IV/derived/cohort.csv
+    labs: /u/project/jchiang/tsisson/mimic/data/IV/derived/labs.csv
+    inputs: /u/project/jchiang/tsisson/mimic/data/IV/derived/inputs.csv
+    icd: /u/project/jchiang/tsisson/mimic/data/IV/derived/icd.csv
+    output_dir: /u/project/jchiang/tsisson/mimic/data/IV/h5
+    derived: /u/project/jchiang/tsisson/mimic/data/IV/derived
   gem: /u/project/jchiang/tsisson/mimic/data/gem
 
-signals: ['PLETH', 'II', 'ABP']
+
+signals:
+  chunk_duration: 60.0
+  target_fs: 125.0
+
+#EHR feature (lab) lookback for first chunktime
+lookback_buffer: 4.0 #hrs

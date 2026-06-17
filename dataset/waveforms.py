@@ -2,19 +2,27 @@ import numpy as np
 import wfdb
 import pandas as pd
 from scipy.signal import resample
-from utils.constants import DEFAULT_CHUNK_DURATION, MED_MAP, TARGET_FS, SIGNAL_NAME_MAP, FINAL_SIGNALS
+from utils.constants import DEFAULT_CHUNK_DURATION, MED_MAP, TARGET_FS, SIGNAL_NAME_MAP
 import datetime
 
-def build_path(mimic, subject_id, record_id, base_path) -> str:
+def build_path(mimic, subject_id, record_id, base_path):
     """Returns (master_path, record_dir) for a given subject + record."""
     if mimic == 4:
         sub_group  = f"p{str(subject_id)[:3]}"
         subject_dir = f"p{subject_id}"
         record_dir  = f"{base_path}/{sub_group}/{subject_dir}/{record_id}"
-        master_path = f"{record_dir}/{record_id}"
-    return master_path, record_dir
+        master_paths = [f"{record_dir}/{record_id}"]
+    if mimic == 3:
+        sub_group  = f"p{str(subject_id)[:2]}"
+        subject_dir = f"p{subject_id}"
+        record_dir  = f"{base_path}/{sub_group}/{subject_dir}"
+        record_paths = wfdb.get_record_list(record_dir)
+        master_paths = [f"{record_dir}/{s}" for s in record_paths 
+                        if s[0] == 'p' and s[-1] != 'n']
+    
+    return master_paths, record_dir
 
-def build_signal_map(record_signals, final_signals=FINAL_SIGNALS):
+def build_signal_map(record_signals):
     """
     Map canonical signal names -> column index; for aligning segment data with variable signals present.
     Only map final_signals list for writing to h5. 
@@ -23,7 +31,7 @@ def build_signal_map(record_signals, final_signals=FINAL_SIGNALS):
     col_idx = 0
     for raw_name in record_signals:
         canonical = SIGNAL_NAME_MAP.get(raw_name, None)
-        if canonical:
+        if canonical and canonical not in signal_map: #if plethR and plethL in same record, picks first one
             signal_map[canonical] = col_idx
             col_idx += 1
     return signal_map
@@ -76,40 +84,27 @@ def resample_signals(waveform_array, original_fs, target_fs=TARGET_FS):
 
     return resampled_data
 
-
-def extract_waveforms(
-    record_path: str,
-    record_dir: str,
-    source_fs: float,
-    target_fs: float = TARGET_FS,
-    chunk_duration: float = DEFAULT_CHUNK_DURATION,
-) -> tuple[list[np.ndarray], list, dict[str, int], int]:
+def get_record_meta(record_path, record_dir, source_fs, chunk_duration):
     """
-    Stream all segments for one record into aligned, resampled chunks.
-    :param: waveform root directory, 
-    :param: record_path: reconstructed path to the record
-
-    Return:
-    chunks: list of (chunk_size, n_signals) float32 arrays
-    timestamps: list of chunk start datetimes
-    signal_map: dictionary mapping of signal type to chunk col index in chunks
-    total_chunks: pre-computed total (for H5 dataset init)
+    Read wfdb headers.
+    Returns metadata needed to init H5ChunkWriter and stream waveforms.
     """
     master_header = wfdb.rdheader(record_path)
-
-    layout_path = f"{record_dir}/{master_header.seg_name[0]}"
-    layout_header = wfdb.rdheader(layout_path)
+    layout_header = wfdb.rdheader(f"{record_dir}/{master_header.seg_name[0]}")
     record_signals = layout_header.sig_name
-
     signal_map = build_signal_map(record_signals)
     if not signal_map:
-        print(f'Empty signal map for {record_path}')
-        return [], [], {}, 0
+        return None
+    signal_names = list(signal_map.keys())
 
     total_samples = master_header.sig_len
-    chunk_size = int(chunk_duration * target_fs)
-    total_chunks = int(np.ceil((total_samples / source_fs) / chunk_duration))
-
+    if total_samples <= 0:
+        print(f'Invalid sig_len={total_samples} for {record_path}')
+        return None
+    total_chunks  = int(np.ceil((total_samples / source_fs) / chunk_duration))
+    if total_chunks <= 0:
+        print(f'Invalid total_chunks={total_chunks} for {record_path}, sig_len={total_samples}')
+        return None
     start_timestamp = datetime.datetime.combine(
         master_header.base_date, master_header.base_time
     )
@@ -118,14 +113,37 @@ def extract_waveforms(
         for i in range(total_chunks)
     ]
 
-    chunks = []
+    return {
+        'master_header': master_header,
+        'record_signals': signal_names,
+        'signal_map': signal_map,
+        'total_chunks': total_chunks,
+        #'chunk_size': chunk_size,
+        'chunk_timestamps': chunk_timestamps,
+    }
+
+
+def stream_waveform_chunks(
+    master_header, record_dir, source_fs,
+    signal_map, chunk_size, chunk_timestamps
+):
+    """
+    Stream one chunk_size chunk of waveform waveform data at a time.
+
+    Yield:
+    chunk_id: chunk identifier
+    chunk_starttime: start timestamp of this chunk
+    chunk_data: (chunk_size, n_signals) float32 array
+    """
+
     buffer = []
     chunk_id = 0
 
     for seg_name in master_header.seg_name[1:]:
+        if seg_name == '~':
+            continue
         seg_path = f"{record_dir}/{seg_name}"
         rec = wfdb.rdrecord(seg_path)
-
         data = align_signals(rec.p_signal, rec.sig_name, signal_map)
         data = resample_signals(data, source_fs)
         buffer.append(data)
@@ -133,7 +151,10 @@ def extract_waveforms(
         total_buffered = sum(s.shape[0] for s in buffer)
         while total_buffered >= chunk_size:
             concat = np.vstack(buffer)
-            chunks.append(concat[:chunk_size, :])
+            chunk_data = concat[:chunk_size, :]
+            chunk_starttime = chunk_timestamps[chunk_id]
+            yield chunk_id, chunk_starttime, chunk_data
+
             remaining = concat[chunk_size:, :]
             buffer = [remaining] if remaining.shape[0] > 0 else []
             total_buffered = remaining.shape[0]
@@ -146,8 +167,6 @@ def extract_waveforms(
             (chunk_size - remaining.shape[0], remaining.shape[1]),
             np.nan, dtype=np.float32
         )
-        chunks.append(np.vstack([remaining, pad]))
-
-    return chunks, chunk_timestamps, signal_map, total_chunks
+        yield chunk_id, chunk_timestamps[chunk_id], np.vstack([remaining, pad])
 
 
