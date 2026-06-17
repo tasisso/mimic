@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from utils.constants import SIGNAL_NAME_MAP, INPUT_LABELS, LAB_MAP, MED_CATEGORIES
+from utils.constants import BOLUS_FEATURES
 
 class H5ChunkWriter:
     """
@@ -42,8 +42,10 @@ class H5ChunkWriter:
         record_id: int,
         chunk_size: int,
         total_chunks: int,
-        target_signals: list[str],
         record_signals: list[str],
+        med_cat_feats: set[str],
+        med_feats: set[str],
+        lab_feats: set[str],
     ):
         """
         Parameters
@@ -57,13 +59,23 @@ class H5ChunkWriter:
         total_chunks    : pre-computed number of chunks for this record
         target_signals  : all signals the pipeline cares about (for has_{signal} attrs)
         record_signals  : signals actually present in this record's layout header
+        has_labs        : sid,hid labs drawn
+        has_meds        : meds of interest present
         """
 
-        self.filepath = f"{output_dir}/{subject_id}_{hadm_id}_{stay_id}_{record_id}.h5"
+        self.filepath = f"{output_dir}/{subject_id}_{record_id}.h5"
         self._h5 = h5py.File(self.filepath, 'a')
 
         self.chunk_size    = chunk_size
         self.total_chunks  = total_chunks
+        self.record_signals = record_signals
+
+        self.has_labs = 0 if len(lab_feats) == 0 else 1
+        self.has_meds = 0 if len(med_feats) == 0 else 1
+        #Feature labels
+        self.lab_feats = lab_feats
+        self.med_feats = med_feats
+        self.med_cat_feats = med_cat_feats
 
         # Root attrs
         self._h5.attrs['subject_id'] = subject_id
@@ -71,11 +83,7 @@ class H5ChunkWriter:
         self._h5.attrs['stay_id']    = stay_id
         self._h5.attrs['record_id']  = record_id
 
-        record_signal_set = set(record_signals)
-        for sig in target_signals:
-            self._h5.attrs[f'has_{sig}'] = int(sig in record_signal_set)
-        
-        self._group = self._h5['data'] if 'data' in self._h5 else self._h5.create_group('data')
+        self._wave_group = self._h5['waveforms'] if 'waveforms' in self._h5 else self._h5.create_group('waveforms')
 
         self._waveform_datasets = {}
         self._timestamps_dataset = None
@@ -99,18 +107,16 @@ class H5ChunkWriter:
         signal_map: dict[str, int],     # signal_name -> column index in signal_data
         ehr_dict: dict[str, float],     # feature_name -> scalar (may be NaN)
     ):
-        
-        self._write_waveforms(chunk_id, signal_data, signal_map)
         self._write_timestamp(chunk_id, timestamp)
+        self._write_waveforms(chunk_id, signal_data, signal_map)
         self._write_ehr(chunk_id, ehr_dict)
     
-    def write_static(self, codes: list, demographics: dict = None):
+    def write_static(self, codes: list):
         
-        self._group.attrs['codes'] = codes
-        
-        if demographics:
-            for key, value in demographics.items():
-                self._group.attrs[key] = value
+        if len(codes) > 0:
+            self._h5.attrs['icd'] = '|'.join(codes)
+        else:
+            self._h5.attrs['icd'] = ''
 
     def close(self):
         if self._h5.id.valid:
@@ -124,50 +130,47 @@ class H5ChunkWriter:
         self._init_ehr_dataset()
 
     def _init_waveform_datasets(self) -> None:
-        for raw_name in self.record_signals:
-            sig_name = SIGNAL_NAME_MAP.get(raw_name)
-            if not sig_name:
-                continue
-            if sig_name not in self._group:
-                ds = self._group.create_dataset(
+        for sig_name in self.record_signals:
+            if sig_name not in self._wave_group:
+                ds = self._wave_group.create_dataset(
                     sig_name,
                     shape=(self.total_chunks, self.chunk_size),
                     dtype=np.float32,
                     compression="gzip",
-                    compression_opts=4,
+                    compression_opts=5,
                 )
             else:
-                ds = self._group[sig_name]
+                ds = self._wave_group[sig_name]
             self._waveform_datasets[sig_name] = ds
 
     def _init_timestamp_dataset(self) -> None:
-        if "timestamps" not in self._group:
-            self._timestamps_dataset = self._group.create_dataset(
+        if "timestamps" not in self._h5:
+            self._timestamps_dataset = self._h5.create_dataset(
                 "timestamps",
                 shape=(self.total_chunks,),
                 dtype=h5py.string_dtype(encoding="utf-8"),
             )
         else:
-            self._timestamps_dataset = self._group["timestamps"]
+            self._timestamps_dataset = self._h5["timestamps"]
 
     def _init_ehr_dataset(self) -> None:
-        ehr_dtype = build_ehr_dtype()
-        if "ehr_values" not in self._group:
-            self._ehr_dataset = self._group.create_dataset(
-                "ehr_values",
+        ehr_dtype = self.build_ehr_dtype()
+        if "ehr" not in self._h5:
+            self._ehr_dataset = self._h5.create_dataset(
+                "ehr",
                 shape=(self.total_chunks,),
                 dtype=ehr_dtype,
                 compression="gzip",
             )
-            # HDF5 defaults to 0 for everything -> fix float fields to NaN, flags to -1
-        
-            empty = np.full(self.total_chunks, -1, dtype=ehr_dtype)
+            empty = np.full(self.total_chunks, 0, dtype=ehr_dtype)
             for field, (dtype, _) in ehr_dtype.fields.items():
                 if np.issubdtype(dtype, np.floating):
                     empty[field] = np.nan
+                elif h5py.check_string_dtype(dtype):
+                    empty[field] = ""
             self._ehr_dataset[:] = empty
         else:
-            self._ehr_dataset = self._group["ehr_values"]
+            self._ehr_dataset = self._h5["ehr"]
 
     #Per chunk writes (private)
     def _write_waveforms(
@@ -183,54 +186,52 @@ class H5ChunkWriter:
     def _write_timestamp(self, chunk_id: int, timestamp) -> None:
         self._timestamps_dataset[chunk_id] = str(timestamp)
 
-    def _write_ehr(self, chunk_id: int, ehr_dict: dict[str, float]) -> None:
-        """
-        Write scalar EHR values for one chunk.
-        - float32 fields: stored as-is (NaN preserved)
-        - int32 fields: NaN -> -1
-        """
+    def _write_ehr(self, chunk_id, ehr_dict) -> None:
+
         row = self._ehr_dataset[chunk_id]
         valid_keys = set(row.dtype.names)
 
         for key, value in ehr_dict.items():
             if key not in valid_keys:
+                print(f'Invalid key: {key}')
                 continue
-            field_dtype = row.dtype.fields[key][0]
-            if np.issubdtype(field_dtype, np.floating):
-                self._ehr_dataset[key, chunk_id] = value
-            else:
-                if pd.isna(value):
-                    # NaN int -> -1 means drug never present in stay
-                    self._ehr_dataset[key, chunk_id] = -1
-                else:
-                    # 0 = present but inactive, 1 = active
-                    self._ehr_dataset[key, chunk_id] = value
+            row[key] = str(value) if h5py.check_string_dtype(row.dtype.fields[key][0]) else value
+            #field_dtype = row.dtype.fields[key][0]
+            # if h5py.check_string_dtype(field_dtype):
+            #     self._ehr_dataset[key, chunk_id] = str(value)
+            # else:
+            #     self._ehr_dataset[key, chunk_id] = value
+        self._ehr_dataset[chunk_id] = row
 
 
-def build_ehr_dtype() -> np.dtype:
-    ehr_dtype_list = []
+    def build_ehr_dtype(self) -> np.dtype:
+        ehr_dtypes = []
 
-    # Med category flags
-    for category in MED_CATEGORIES:
-        ehr_dtype_list.append((f'{category}_on', np.int32))
+        if self.has_meds:
+            # Med category flags
+            for category in self.med_cat_feats:
+                ehr_dtypes.append((f'{category}_on', np.int32))
 
-    # Per-med features
-    for med_name in INPUT_LABELS:
-        ehr_dtype_list.append((f'{med_name}_ratenorm', np.float32))
-        ehr_dtype_list.append((f'{med_name}_bolus', np.int32))
-        ehr_dtype_list.append((f'{med_name}_on', np.int32))
+            # Per-med features
+            for med_name in self.med_feats:
+                ehr_dtypes.append((f'{med_name}_ratenorm', np.float32))
+                ehr_dtypes.append((f'{med_name}_on', np.int32))
+                if med_name in BOLUS_FEATURES:
+                    ehr_dtypes.append((f'{med_name}_bolus', np.int32))
 
-    # Derived
-    ehr_dtype_list.extend([
-        ('norepi_eq', np.float32),
-        ('vasoactive_on', np.int32),
-    ])
+            # Derived
+            ehr_dtypes.extend([
+                ('norepi_eq', np.float32),
+                ('vasoactive_on', np.int32),
+            ])
 
-    # Labs
-    for lab_name in LAB_MAP.values():
-        ehr_dtype_list.append((lab_name, np.float32))
+        # Labs
+        if self.has_labs:
+            for lab_name in self.lab_feats:
+                ehr_dtypes.append((lab_name, np.float32))
+                ehr_dtypes.append((f'{lab_name}_abnorm', np.float32))
 
-    return np.dtype(ehr_dtype_list)
+        return np.dtype(ehr_dtypes)
 
 def aggregate_ehr(ehr_dict: dict[str, np.ndarray]) -> dict[str, float]:
     """
