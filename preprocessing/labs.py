@@ -1,7 +1,14 @@
 import pandas as pd
 from utils.utils import load_tbl, get_path
-from utils.constants import LAB_LABELS
+from utils.constants import LAB_LABELS, LAB_MAP
 
+def get_labs(dirs, cohort):
+
+    labs = load_labs(dirs, cohort)
+    matched = match_labs(labs, cohort)
+    filtered = filter_labs(matched)
+    filtered = normalize_label(filtered, LAB_MAP)
+    return filtered
 
 def load_labs(dirs, cohort, chunksize=200000):
     '''load and label raw lab events'''
@@ -54,10 +61,7 @@ def filter_labs(matched_labs, labels=LAB_LABELS):
 
     return matched_labs[matched_labs['label'].isin(labels)]
 
-def get_labs(dirs, cohort):
-
-    labs = load_labs(dirs, cohort)
-    matched = match_labs(labs, cohort)
-
-    return filter_labs(matched)
-
+def normalize_label(df, lab_map):
+    df = df.copy()
+    df['lab_name'] = df['label'].map(lambda l: lab_map.get(l))
+    return df

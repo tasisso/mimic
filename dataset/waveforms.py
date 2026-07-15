@@ -118,7 +118,6 @@ def get_record_meta(record_path, record_dir, source_fs, chunk_duration):
         'record_signals': signal_names,
         'signal_map': signal_map,
         'total_chunks': total_chunks,
-        #'chunk_size': chunk_size,
         'chunk_timestamps': chunk_timestamps,
     }
 
@@ -138,14 +137,16 @@ def stream_waveform_chunks(
 
     buffer = []
     chunk_id = 0
-
-    for seg_name in master_header.seg_name[1:]:
+    n_signals = len(signal_map)
+    for seg_name, seg_len in zip(master_header.seg_name[1:], master_header.seg_len[1:]):
         if seg_name == '~':
-            continue
-        seg_path = f"{record_dir}/{seg_name}"
-        rec = wfdb.rdrecord(seg_path)
-        data = align_signals(rec.p_signal, rec.sig_name, signal_map)
-        data = resample_signals(data, source_fs)
+            data = np.full((seg_len, n_signals), np.nan, dtype=np.float32)
+            data = resample_signals(data, source_fs)
+        else:
+            seg_path = f"{record_dir}/{seg_name}"
+            rec = wfdb.rdrecord(seg_path)
+            data = align_signals(rec.p_signal, rec.sig_name, signal_map)
+            data = resample_signals(data, source_fs)
         buffer.append(data)
 
         total_buffered = sum(s.shape[0] for s in buffer)

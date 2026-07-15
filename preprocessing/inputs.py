@@ -1,13 +1,22 @@
 import pandas as pd
+import numpy as np
+import ast
 from utils.utils import load_tbl
-from utils.constants import INPUT_LABELS
+from utils.constants import INPUT_LABELS, MED_MAP, DOSE_DEPENDENT
 
 def get_inputs(dirs, cohort):
     mimic = cohort['mimic'].iloc[0]
     
     inputs = load_inputs(dirs, mimic)
     matched = match_inputs(inputs, cohort)
-    return filter_inputs(matched)
+    filtered = filter_inputs(matched)
+    #add normalized label and label categories (list)
+    filtered = normalize_label(filtered, MED_MAP)
+    filtered['ratenorm'] = normalize_rate(filtered)
+    filtered['resolved_categories'] = filtered.apply(get_dose_categories, axis=1)
+    filtered['categories_str'] = filtered['resolved_categories'].apply('|'.join)
+    return filtered
+
 
 def load_inputs(dirs, mimic):
     '''load and label raw lab events'''
@@ -40,10 +49,9 @@ def load_inputs(dirs, mimic):
 
 def match_inputs(inputs, cohort):
     '''
-    Match inputs to waveform window, 
-    includes a 2 hour buffer before waveform start
+    Match inputs to waveform window
     '''
-    buffer = pd.Timedelta(hours=2.0)
+    #buffer = pd.Timedelta(hours=2.0)
     mimic = cohort['mimic'].iloc[0]
     if mimic == 3:
         merge_key = 'icustay_id'
@@ -59,14 +67,17 @@ def match_inputs(inputs, cohort):
     
     #Overlapping with the waveform window
     return stay_inputs[
-        (stay_inputs['start_timestamp'] < stay_inputs['endtime']) &
-        (stay_inputs['end_timestamp'] > stay_inputs['starttime'] - buffer)
+        (stay_inputs['start_timestamp'] <= stay_inputs['endtime']) &
+        (stay_inputs['end_timestamp'] > stay_inputs['starttime'])
     ]
 
 def filter_inputs(inputs, labels=INPUT_LABELS):
     '''filter to labels of interest'''
     inputs = inputs[inputs['label'].isin(labels)]
-    return inputs
+    return inputs[
+        ((inputs['rate'].notna()) & (inputs['rate'] > 0)) |
+        ((inputs['amount'].notna()) & (inputs['amount'] > 0))
+    ]
 
 
 def format_mv(df, mimic):
@@ -230,3 +241,59 @@ def push_intervals(df):
                 ))
 
     return intervals
+
+def normalize_rate(df):
+    conversions = {
+        'mcg/kg/min': lambda r, weight: r,
+        'mcgkgmin':   lambda r, weight: r,
+        'mcg/kg/hour': lambda r, weight: r / 60,
+        'mcgkghr':    lambda r, weight: r / 60,
+        'mcgmin':     lambda r, weight: r / weight,
+        'mcg/min':    lambda r, weight: r / weight,
+        'mcg/hour':   lambda r, weight: r / weight / 60,
+        'mcghr':      lambda r, weight: r / weight / 60,
+        'ng/kg/min':  lambda r, weight: r / 1000,
+
+        'mg/kg/hour': lambda r, weight: r * 1000 / 60,
+        'mgkghr':     lambda r, weight: r * 1000 / 60,
+        'mg/hour':    lambda r, weight: r * 1000 / weight / 60,
+        'mghr':       lambda r, weight: r * 1000 / weight / 60,
+        'mg/min':     lambda r, weight: r * 1000 / weight,
+        'mgmin':      lambda r, weight: r * 1000 / weight,
+
+        'gm/min':     lambda r, weight: r * 1e6 / weight,
+        'grams/min':  lambda r, weight: r * 1e6 / weight,
+        'grams/hour': lambda r, weight: r * 1e6 / weight / 60,
+
+        #Units rates not weight-normalized
+        'units/hour': lambda r, weight: r / 60,
+        'Uhr':        lambda r, weight: r / 60,
+        'units/min':  lambda r, weight: r,
+        'Umin':       lambda r, weight: r,
+
+        # ml/min — Fentanyl Base (MIMIC-III)
+        'ml/min': lambda r, weight: r * 50 / weight # mcg/min, assuming 50 mcg/ml concentration
+    }
+    result = pd.Series(np.nan, index=df.index, dtype=np.float64)
+    for uom, fn in conversions.items():
+        mask = (df['rateuom'] == uom) & df['rate'].notna() & df['weight_kg'].notna()
+        result[mask] = fn(df.loc[mask, 'rate'], df.loc[mask, 'weight_kg'])
+
+    return result.astype(np.float32)
+
+def normalize_label(df, medication_map):
+    df = df.copy()
+    df['med_name'] = df['label'].map(lambda l: medication_map.get(l, (None, None))[0])
+    df['categories'] = df['label'].map(lambda l: medication_map.get(l, (None, None))[1])
+    return df
+
+def get_dose_categories(row):
+    if row['med_name'] not in DOSE_DEPENDENT:
+        return row['categories']  # fixed categories, unchanged
+    if pd.isna(row['ratenorm']):
+        return ['vasoactive'] #weight missing -> fallback to vasoactive 
+    ranges = DOSE_DEPENDENT[row['med_name']]
+    for low, high, cats in ranges:
+        if low <= row['ratenorm'] < high:
+            return cats
+    return ['vasoactive'] #dose fell outside of defined range -> fallback to vasoactive
