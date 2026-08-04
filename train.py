@@ -160,8 +160,8 @@ def main():
     print(f"Train files: {len(train_df)}  |  Val files: {len(val_df)}")
 
     # ── datasets & loaders ──────────────────────────────────────────────────
-    train_ds = build_dataset(train_df, args.signals, med_labels, med_categories, args.task)
-    val_ds   = build_dataset(val_df,   args.signals, med_labels, med_categories, args.task)
+    train_ds = build_dataset(train_df, args.signals, med_labels, med_categories, args.task, data_dir=args.data_dir)
+    val_ds   = build_dataset(val_df,   args.signals, med_labels, med_categories, args.task, data_dir=args.data_dir)
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
                               num_workers=args.num_workers, pin_memory=True)
