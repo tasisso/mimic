@@ -43,45 +43,78 @@ def train_one_epoch(model, loader, optimizer, device):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, n_input_targets, n_category_targets):
     model.eval()
-    total_loss = 0.0
-    total_correct = 0
-    total_valid = 0
-    n_batches = 0
+    total_loss = 0
+    
+    all_logits  = []
+    all_targets = []
 
-    for waveform, targets in loader:
-        waveform = waveform.to(device)
-        targets  = targets.to(device)
+    with torch.no_grad():
+        for waveform, targets in loader:
+            waveform = waveform.to(device)
+            targets  = targets.to(device)
 
-        logits = model(waveform)
-        loss   = masked_bce_loss(logits, targets)
+            logits = model(waveform)
+            loss   = masked_bce_loss(logits, targets)
+            total_loss += loss.item()
 
-        mask = targets != -1
+            all_logits.append(logits.cpu())
+            all_targets.append(targets.cpu())
+
+    all_logits  = torch.cat(all_logits,  dim=0)  # (N, n_labels)
+    all_targets = torch.cat(all_targets, dim=0)  # (N, n_labels)
+
+    # split by label group
+    input_logits    = all_logits[:,  :n_input_targets]
+    input_targets   = all_targets[:, :n_input_targets]
+    cat_logits      = all_logits[:,  n_input_targets:]
+    cat_targets     = all_targets[:, n_input_targets:]
+
+    def masked_acc(logits, targets):
+        mask  = targets != -1
         preds = (torch.sigmoid(logits) > 0.5).float()
-        total_correct += (preds[mask] == targets[mask]).sum().item()
-        total_valid   += mask.sum().item()
-        total_loss    += loss.item()
-        n_batches     += 1
-
-    avg_loss = total_loss / max(n_batches, 1)
-    acc      = total_correct / max(total_valid, 1)
-    return avg_loss, acc
+        return (preds[mask] == targets[mask]).float().mean().item()
 
 
-def build_dataset(metadata, signals, med_labels, med_categories, task):
+    overall_acc  = masked_acc(all_logits,    all_targets)
+
+    input_acc, input_prec, input_rec = masked_metrics(input_logits, input_targets)
+    cat_acc,   cat_prec,   cat_rec   = masked_metrics(cat_logits,   cat_targets)
+
+    return total_loss / len(loader), overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec
+
+
+def build_dataset(metadata, signals, med_labels, med_categories, task, data_dir):
     return ICUDataset(
         metadata=metadata,
         signals=signals,
         med_labels=med_labels,
         med_categories=med_categories,
         task=task,
+        data_dir=data_dir
     )
+
+def masked_metrics(logits, targets):
+    mask    = targets != -1
+    preds   = (torch.sigmoid(logits) > 0.5).float()
+    correct = (preds[mask] == targets[mask]).float().mean().item()
+    
+    # of all positive predictions, how many are right
+    pos_mask = (preds == 1) & mask
+    precision = (targets[pos_mask] == 1).float().mean().item() if pos_mask.sum() > 0 else 0.0
+    
+    # of all true positives, how many did we catch
+    true_pos_mask = (targets == 1) & mask
+    recall = (preds[true_pos_mask] == 1).float().mean().item() if true_pos_mask.sum() > 0 else 0.0
+
+    return correct, precision, recall
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--metadata',      default='data/metadata.csv')
+    parser.add_argument('--data_dir',      default='./data/data')
     parser.add_argument('--task',          default='input_classification',
                         choices=['input_classification', 'category_classification'])
     parser.add_argument('--signals',       nargs='+', default=['PLETH', 'II', 'ABP'])
@@ -155,14 +188,20 @@ def main():
         t0 = time.time()
 
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, device)
-        val_loss,   val_acc   = evaluate(model, val_loader, device)
+        val_loss, overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec = evaluate(
+            model, val_loader, device, 
+            len(med_labels), 
+            len(med_categories)
+        )
         scheduler.step(val_loss)
 
         elapsed = time.time() - t0
         print(
             f"epoch {epoch:3d}/{args.epochs} | "
-            f"train loss {train_loss:.4f}  acc {train_acc:.3f} | "
-            f"val loss {val_loss:.4f}  acc {val_acc:.3f} | "
+            f"train loss {train_loss:.4f} | "
+            f"val loss {val_loss:.4f} | \n"
+            f"  input    acc {input_acc:.3f}  prec {input_prec:.3f}  rec {input_rec:.3f} | \n"
+            f"  category acc {cat_acc:.3f}  prec {cat_prec:.3f}  rec {cat_rec:.3f}"
             f"{elapsed:.0f}s"
         )
 
@@ -170,7 +209,7 @@ def main():
             best_val_loss = val_loss
             ckpt_path = os.path.join(args.checkpoint_dir, 'best.pt')
             torch.save({'epoch': epoch, 'model': model.state_dict(),
-                        'val_loss': val_loss, 'val_acc': val_acc}, ckpt_path)
+                        'val_loss': val_loss, 'val_acc': overall_acc}, ckpt_path)
             print(f"  → saved checkpoint (val_loss={val_loss:.4f})")
 
     print(f"\nDone. Best val loss: {best_val_loss:.4f}")

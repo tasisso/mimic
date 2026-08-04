@@ -194,7 +194,8 @@ class ICUDataset(IterableDataset):
                  med_labels=[],
                  med_categories=[],
                  lab_labels=[],
-                 task='input_classification'
+                 task='input_classification',
+                 data_dir='./data/data'
                  ):
         """
         task options:
@@ -203,6 +204,7 @@ class ICUDataset(IterableDataset):
             'rate_regression'       - continuous infusion rates
             'icd_classification'    - static ICD labels
         """
+        self.data_dir = data_dir
         self.task = task
         self.metadata = metadata
         self.signals = signals
@@ -219,7 +221,7 @@ class ICUDataset(IterableDataset):
     def __iter__(self):
         for _, row in self.metadata.iterrows():
             h5_path = row['h5_filepath']
-            h5_path = './data/data/' + h5_path
+            h5_path = self.data_dir + h5_path
             n_chunks = int(row['n_chunks'])
 
             file_labs   = set(row['labs'].split('|')) if row['has_labs'] else set()
