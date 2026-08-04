@@ -151,7 +151,7 @@ def main():
 
     if 'split' in metadata.columns:
         train_df = metadata[(metadata['has_inputs'] == 1) & (metadata['split'] == 'train')]
-        val_df   = metadata[(metadata['has_inputs'] == 1) & (metadata['split'] == 'train')]
+        val_df   = metadata[(metadata['has_inputs'] == 1) & (metadata['split'] == 'val')]
     else:
         n_val    = max(1, int(len(metadata) * args.val_split))
         val_df   = metadata.iloc[:n_val]
