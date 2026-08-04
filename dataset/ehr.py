@@ -1,15 +1,15 @@
 import pandas as pd
 import numpy as np
-from preprocessing.wave_meta import WaveMeta
+from preprocessing.wave_meta import PhysioNet
 from preprocessing.demographics import get_demographics
-from preprocessing.weight import get_stay_weight_height
+from preprocessing.biometrics import get_stay_weight_height
 from preprocessing.labs import get_labs
 from preprocessing.inputs import get_inputs
 from preprocessing.icd import get_icd
 from preprocessing.cohort import match_icustays
 from utils.utils import load_tbl, build_dirs
 
-from utils.constants import DEFAULT_CHUNK_DURATION, MED_MAP, LAB_MAP
+from utils.constants import DEFAULT_CHUNK_DURATION, VASOACTIVE
 
 class MIMIC_EHR:
     '''
@@ -50,8 +50,6 @@ class MIMIC_EHR:
         # 3) Add weight (kg) -> 'patientweight' col and
         cohort = get_stay_weight_height(self.dirs, cohort)
         self.cohort = cohort
-        mask = (cohort['age'] > 0) & (cohort['height_cm'] < 60)
-        cohort.loc[mask, 'height_cm'] = np.nan
         # labs, inputs, icd
         self.labs = get_labs(self.dirs, cohort)
         self.inputs = get_inputs(self.dirs, cohort)
@@ -74,56 +72,56 @@ class ehrExtractor:
     """
 
     def __init__(self, inputs, labs, codes):
-        # self.med_categories = MED_CATEGORIES
-        self.medication_map = MED_MAP
-        # self.all_meds = list(MEDS.keys())
-        self.lab_map = LAB_MAP
 
         inputs = inputs.copy()
         inputs['starttime'] = pd.to_datetime(inputs['starttime'])
         inputs['endtime'] = pd.to_datetime(inputs['endtime'])
-        labs = labs.copy()
+        labs = labs[labs['valuenum'].notna()].copy()
         labs['charttime'] = pd.to_datetime(labs['charttime'])
 
         #Raw dataframes
-        self.meds_by_stay = inputs.groupby('stay_id')
+        self.inputs_by_stay = inputs.groupby('stay_id')
         self.labs_by_stay = labs.groupby(['subject_id', 'hadm_id'])
         self.codes_by_stay = codes.groupby(['subject_id', 'hadm_id'])
 
-        #Lab and med features 
-        self.stay_med_feats = {}
-        for stay_id, group in self.meds_by_stay:
-            labels = set(group['label'].unique())
-            meds = set(
-                self.medication_map[l][0] for l in labels
-                if l in self.medication_map and self.medication_map[l]
-            )
-            cats = set(
-                self.medication_map[l][1] for l in labels
-                if l in self.medication_map and self.medication_map[l]
-            )
-            self.stay_med_feats[stay_id] = (meds, cats)
+        #Lab and med features      
+        self.stay_input_labels = {} 
+        for stay_id, group in self.inputs_by_stay:
+            continuous = group[group['ordercategorydescription'].isin(['Continuous Med', 'Continuous IV'])]
 
-        self.stay_lab_feats = {}
-        for (subject_id, hadm_id), group in self.labs_by_stay:
-            labels = set(group['label'].unique())
-            labs = set(
-                self.lab_map[l] for l in labels
-                if l in self.lab_map
+            meds_with_rate = set(continuous['med_name'].unique())
+            meds_on_only = set(group['med_name'].unique()) - meds_with_rate
+            
+            # cats = set(
+            #     group['resolved_categories'].explode().unique()
+            # )
+            cats = set(
+                group['categories_str']
+                .str.split('|')
+                .explode()
+                .unique()
             )
-            self.stay_lab_feats[(subject_id, hadm_id)] = labs
+            if cats & VASOACTIVE:
+                cats.add('vasoactive')
+
+            self.stay_input_labels[stay_id] = (meds_with_rate, meds_on_only, cats)
+
+        self.stay_lab_labels = {}
+        for (subject_id, hadm_id), group in self.labs_by_stay:
+            labs = set(group['lab_name'].unique())
+            self.stay_lab_labels[(subject_id, hadm_id)] = labs
         
         #feature dict
         self.ehr = {}
 
-    def get_features(self, subject_id, hadm_id, stay_id, patientweight, chunk_starttime, lookback):
+    def get_features(self, subject_id, hadm_id, stay_id, chunk_starttime, lookback):
         chunk_start = pd.Timestamp(chunk_starttime)
         chunk_end = chunk_start + pd.Timedelta(seconds=DEFAULT_CHUNK_DURATION)
-        stay_meds, _ = self.stay_med_feats.get(stay_id, (set(), set()))
-        stay_labs = self.stay_lab_feats.get((subject_id, hadm_id), set())
+        _, _, stay_cats = self.stay_input_labels.get(stay_id, (set(), set(), set()))
+        stay_labs = self.stay_lab_labels.get((subject_id, hadm_id), set())
         ehr = {}
-        if len(stay_meds) > 0:
-            ehr = self._fill_meds(ehr, stay_id, patientweight, chunk_start, chunk_end)
+        if len(stay_cats) > 0:
+            ehr = self._fill_meds(ehr, stay_id, chunk_start, chunk_end)
         if len(stay_labs) > 0:
             ehr = self._fill_labs(ehr, subject_id, hadm_id, chunk_start, chunk_end, lookback)
         
@@ -132,41 +130,40 @@ class ehrExtractor:
     def get_codes(self, subject_id, hadm_id):
         try:
             stay_codes = self.codes_by_stay.get_group((subject_id, hadm_id))
-            present = stay_codes['icd10_code'].values
-            return present
+            icd9 = stay_codes[stay_codes['icd_version'] == 9]['vers_code'].dropna().tolist()
+            icd10 = stay_codes[stay_codes['icd_version'] == 10]['icd10_code'].dropna().tolist()
+            icd10_truncated = set({code[:3] for code in icd10 if len(code) >= 3})
+            return icd9, icd10, icd10_truncated
         except KeyError:
-            return []
+            return [], [], []
 
 
-    def _fill_meds(self, ehr, stay_id, weight, chunk_start, chunk_end):
-        stay_inputs = self.meds_by_stay.get_group(stay_id)
+    def _fill_meds(self, ehr, stay_id, chunk_start, chunk_end):
+        stay_inputs = self.inputs_by_stay.get_group(stay_id)
 
         chunk_inputs = stay_inputs[
-            (stay_inputs['starttime'] < chunk_end) &
+            (stay_inputs['starttime'] <= chunk_end) &
             (stay_inputs['endtime'] > chunk_start)
         ]
 
         for _, row in chunk_inputs.iterrows():
 
-            med_name, category = self.medication_map.get(row['label'])
+            med_name = row['med_name']
 
             rate = row['rate']
-            rateuom = row['rateuom']
+            rate_norm = row['ratenorm']
             amount = row['amount']
-            route = row['ordercategorydescription']
+            categories = row['categories_str'].split('|')
 
             #For titration, take maximum rate within chunk window
-            if pd.notna(rate) and rate > 0 and route in ('Continuous Med', 'Continuous IV'):
-                rate_norm = self.normalize_rate(rate, rateuom, weight)
+            if pd.notna(rate_norm) and rate_norm > 0:
                 current = ehr.get(f'{med_name}_ratenorm', np.nan)
                 ehr[f'{med_name}_ratenorm'] = rate_norm if np.isnan(current) else max(current, rate_norm)
 
-            if pd.notna(amount) and amount > 0 and route in ('Bolus', 'Drug Push'):
-                ehr[f'{med_name}_bolus'] = 1
-
             if (pd.notna(amount) and amount > 0) or (pd.notna(rate) and rate > 0):
-                ehr[f'{category}_on'] = 1
                 ehr[f'{med_name}_on'] = 1
+                for category in categories:
+                    ehr[f'{category}_on'] = 1
 
         ehr = self._add_derived(ehr)
         return ehr
@@ -182,57 +179,58 @@ class ehrExtractor:
         ].sort_values('charttime').groupby('label').last().reset_index()
         for _, row in chunk_labs.iterrows():
 
-            lab = self.lab_map.get(row['label'])
-
+            lab = row['lab_name']
             if pd.notna(row['valuenum']):
                 ehr[lab] = row['valuenum']
                 ehr[f"{lab}_abnorm"] = 1 if row['flag'] == 'abnormal' else 0
 
         return ehr
+    # def normalize_rate(rate, rate_uom, weight):
+    #     if pd.isna(rate) or pd.isna(weight):
+    #         return np.nan
+    #     conversions = {
+    #         'mcg/kg/min': lambda r: r,
+    #         'mcgkgmin':   lambda r: r,
+    #         'mcg/kg/hour': lambda r: r / 60,
+    #         'mcgkghr':    lambda r: r / 60,
+    #         'mcgmin':     lambda r: r / weight,
+    #         'mcg/min':    lambda r: r / weight,
+    #         'mcg/hour':   lambda r: r / weight / 60,
+    #         'mcghr':      lambda r: r / weight / 60,
+    #         'ng/kg/min':  lambda r: r / 1000,
 
-    @staticmethod
-    def normalize_rate(rate, rate_uom, weight):
-        if pd.isna(rate) or pd.isna(weight):
-            return np.nan
-        conversions = {
-            'mcg/kg/min': lambda r: r,
-            'mcgkgmin':   lambda r: r,
-            'mcg/kg/hour': lambda r: r / 60,
-            'mcgkghr':    lambda r: r / 60,
-            'mcgmin':     lambda r: r / weight,
-            'mcg/min':    lambda r: r / weight,
-            'mcg/hour':   lambda r: r / weight / 60,
-            'mcghr':      lambda r: r / weight / 60,
-            'ng/kg/min':  lambda r: r / 1000,
+    #         'mg/kg/hour': lambda r: r * 1000 / 60,
+    #         'mgkghr':     lambda r: r * 1000 / 60,
+    #         'mg/hour':    lambda r: r * 1000 / weight / 60,
+    #         'mghr':       lambda r: r * 1000 / weight / 60,
+    #         'mg/min':     lambda r: r * 1000 / weight,
+    #         'mgmin':      lambda r: r * 1000 / weight,
 
-            'mg/kg/hour': lambda r: r * 1000 / 60,
-            'mgkghr':     lambda r: r * 1000 / 60,
-            'mg/hour':    lambda r: r * 1000 / weight / 60,
-            'mghr':       lambda r: r * 1000 / weight / 60,
-            'mg/min':     lambda r: r * 1000 / weight,
-            'mgmin':      lambda r: r * 1000 / weight,
+    #         'gm/min':     lambda r: r * 1e6 / weight,
+    #         'grams/min':  lambda r: r * 1e6 / weight,
+    #         'grams/hour': lambda r: r * 1e6 / weight / 60,
 
-            'gm/min':     lambda r: r * 1e6 / weight,
-            'grams/min':  lambda r: r * 1e6 / weight,
-            'grams/hour': lambda r: r * 1e6 / weight / 60,
+    #         #Units measurements not weight-normalized
+    #         'units/hour': lambda r: r / 60,
+    #         'Uhr':        lambda r: r / 60,
+    #         'units/min':  lambda r: r,
+    #         'Umin':       lambda r: r,
 
-            #Units measurements not weight-normalized
-            'units/hour': lambda r: r / 60,
-            'Uhr':        lambda r: r / 60,
-            'units/min':  lambda r: r,
-            'Umin':       lambda r: r,
+    #         # ml/min — Fentanyl Base (MIMIC-III)
+    #         'ml/min': lambda r: r * 50 / weight # mcg/min, assuming 50 mcg/ml concentration
+    #     }
+    #     fn = conversions.get(rate_uom)
+    #     if fn is None:
+    #         print(f"Unhandled rate UOM: {rate_uom}")
+    #         return np.nan
+    #     return fn(rate)
 
-            # ml/min — Fentanyl Base
-            'ml/min': lambda r: r * 50 / weight # mcg/min, assuming 50 mcg/ml concentration
-        }
-        fn = conversions.get(rate_uom)
-        if fn is None:
-            print(f"Unhandled rate UOM: {rate_uom}")
-            return np.nan
-        return fn(rate)
 
     @staticmethod
     def _add_derived(ehr):
+        if any(ehr.get(f'{cat}_on') == 1 for cat in VASOACTIVE):
+            ehr['vasoactive_on'] = 1
+        
         #Compute norepinephrine equalivent and vasoactive_on flag 
         NEE_FACTORS = {
             'norepinephrine': 1.0,
@@ -248,9 +246,6 @@ class ehrExtractor:
             if f'{drug}_ratenorm' in ehr
         )
         ehr['norepi_eq'] = norepi_eq if norepi_eq > 0 else np.nan
-
-        if ehr.get('vasopressor_on') == 1 or ehr.get('vasodilator_on') == 1:
-            ehr['vasoactive_on'] = 1
 
         return ehr
 

@@ -86,7 +86,7 @@ def format_mv(df, mimic):
     elif mimic == 4:
         stay_key = 'stay_id'
     return df[[stay_key, 'itemid', 'label', 'starttime', 'endtime', 
-            'rate', 'rateuom', 'amount', 'amountuom', 'ordercategorydescription']]
+            'rate', 'rateuom', 'amount', 'amountuom', 'ordercategorydescription', 'statusdescription']]
 
 
 def format_cv(df):

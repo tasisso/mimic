@@ -31,7 +31,7 @@ def get_path(filename, source, dirs):
 
 def build_dirs(config, mimic):
     '''build directory lookup dict from config'''
-    clinical_root = config['paths'][mimic]['clinical_root']
+    clinical_root = config['paths'][f'mimic{mimic}']['clinical_root']
     
     if mimic == 3:
         icu_dir = hosp_dir = clinical_root
@@ -40,8 +40,8 @@ def build_dirs(config, mimic):
         hosp_dir = os.path.join(clinical_root, 'hosp')
     
     return {
-        'derived': config['paths']['derived'],
+        'derived': config['paths'][f'mimic{mimic}']['derived'],
         'icu': icu_dir,
         'hosp': hosp_dir,
-        'waveforms': config['paths'][mimic]['waveforms_root']
+        'waveforms': config['paths'][f'mimic{mimic}']['waveforms_root']
     }

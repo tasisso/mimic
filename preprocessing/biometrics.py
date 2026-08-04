@@ -1,4 +1,5 @@
-import pandas as pd 
+import pandas as pd
+import numpy as np
 from utils.constants import WEIGHT_ITEMIDS, WEIGHT_MAX, WEIGHT_MIN, HEIGHT_ITEMIDS
 from utils.utils import load_tbl
 
@@ -31,6 +32,10 @@ def get_stay_weight_height(dirs, cohort):
 
     result = cohort.merge(stay_weights, how='left', on=stay_key)
     result = result.merge(stay_heights[[stay_key, 'height_cm']], how='left', on=stay_key)
+
+    #Filter invalid height measurements
+    mask = (result['age'] > 0) & (result['height_cm'] < 60)
+    result.loc[mask, 'height_cm'] = np.nan
 
     return result
 

@@ -1,5 +1,4 @@
 import pandas as pd
-from utils.constants import FINAL_SIGNALS, MIN_SIGNAL_HRS
 
 def match_icustays(meta, icustays):
     mimic = meta['mimic'].iloc[0]
@@ -29,11 +28,6 @@ def match_icustays(meta, icustays):
     
     return df
 
-def filter_signal(cohort, signals=FINAL_SIGNALS, min_length = MIN_SIGNAL_HRS):
-    mask = pd.Series(True, index=cohort.index)
-    for signal in signals:
-        mask = mask & (cohort[f'{signal}_hrs'] >= min_length)
 
-    return cohort[mask]
  
 

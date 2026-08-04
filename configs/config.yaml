@@ -25,4 +25,4 @@ signals:
   target_fs: 125.0
 
 #EHR feature (lab) lookback for first chunktime
-lookback_buffer: 4.0 #hrs
+lookback_buffer: 12.0 #hrs
