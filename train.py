@@ -14,7 +14,6 @@ def masked_bce_loss(logits, targets, pos_weight=None):
     mask = targets != -1                          # (B, n_labels) bool
     logits  = logits[mask]
     targets = targets[mask]
-    print(f"active labels: {mask.sum().item()} / {mask.numel()}")
     return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight)
 
 def train_one_epoch(model, loader, optimizer, device, pos_weight):
