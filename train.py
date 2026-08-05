@@ -179,11 +179,10 @@ def main():
     n_labels = train_ds.n_input_targets + train_ds.n_category_targets
     print(f"n_labels={n_labels}  (inputs={train_ds.n_input_targets}, categories={train_ds.n_category_targets})")
 
-    pos_weight = torch.tensor([19.0]).to(device)
-    print(f'Positive weight: {pos_weight}')
-
     # ── model ───────────────────────────────────────────────────────────────
     device = torch.device(args.device)
+    pos_weight = torch.tensor([19.0]).to(device)
+    print(f'Positive weight: {pos_weight}')
     model  = ResNet50(in_channels=len(args.signals), classes=n_labels).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Model params: {n_params:.1f}M  |  device: {device}")
