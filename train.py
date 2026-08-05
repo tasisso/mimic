@@ -27,6 +27,7 @@ def train_one_epoch(model, loader, optimizer, device):
         logits = model(waveform)
         loss   = masked_bce_loss(logits, targets)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         with torch.no_grad():
@@ -122,7 +123,7 @@ def main():
     parser.add_argument('--signals',       nargs='+', default=['PLETH', 'II', 'ABP'])
     parser.add_argument('--epochs',        type=int,   default=20)
     parser.add_argument('--batch_size',    type=int,   default=32)
-    parser.add_argument('--lr',            type=float, default=1e-3)
+    parser.add_argument('--lr',            type=float, default=1e-4)
     parser.add_argument('--num_workers',   type=int,   default=4)
     parser.add_argument('--val_split',     type=float, default=0.1,
                         help='Fraction of files held out for validation')
