@@ -46,6 +46,7 @@ def train_one_epoch(model, loader, optimizer, device):
 def evaluate(model, loader, device, n_input_targets, n_category_targets):
     model.eval()
     total_loss = 0
+    n_batches  = 0
     
     all_logits  = []
     all_targets = []
