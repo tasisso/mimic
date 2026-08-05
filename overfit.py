@@ -21,13 +21,6 @@ def get_overfit_batch(dataset, batch_size=8, max_search=2000):
     targets   = torch.stack([s[1] for s in samples])
     return waveforms, targets
 
-def masked_bce_loss(logits, targets):
-    mask = targets != -1                          # (B, n_labels) bool
-    logits  = logits[mask]
-    targets = targets[mask]
-    print(f"active labels: {mask.sum().item()} / {mask.numel()}")
-    return F.binary_cross_entropy_with_logits(logits, targets)
-
 
 def overfit(model, dataset, n_steps=500, batch_size=8, lr=1e-3, device='cpu'):
     model = model.to(device)

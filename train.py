@@ -9,10 +9,15 @@ from torch.utils.data import DataLoader
 
 from icu_dataset import ICUDataset
 from models.resnet import ResNet50
-from overfit import masked_bce_loss
 
+def masked_bce_loss(logits, targets, pos_weight=None):
+    mask = targets != -1                          # (B, n_labels) bool
+    logits  = logits[mask]
+    targets = targets[mask]
+    print(f"active labels: {mask.sum().item()} / {mask.numel()}")
+    return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight)
 
-def train_one_epoch(model, loader, optimizer, device):
+def train_one_epoch(model, loader, optimizer, device, pos_weight):
     model.train()
     total_loss = 0.0
     total_correct = 0
@@ -25,7 +30,7 @@ def train_one_epoch(model, loader, optimizer, device):
 
         optimizer.zero_grad()
         logits = model(waveform)
-        loss   = masked_bce_loss(logits, targets)
+        loss   = masked_bce_loss(logits, targets, pos_weight)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -44,7 +49,7 @@ def train_one_epoch(model, loader, optimizer, device):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, n_input_targets, n_category_targets):
+def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_weight):
     model.eval()
     total_loss = 0
     n_batches  = 0
@@ -58,7 +63,7 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets):
             targets  = targets.to(device)
 
             logits = model(waveform)
-            loss   = masked_bce_loss(logits, targets)
+            loss   = masked_bce_loss(logits, targets, pos_weight)
             total_loss += loss.item()
             n_batches  += 1
 
@@ -174,14 +179,8 @@ def main():
     n_labels = train_ds.n_input_targets + train_ds.n_category_targets
     print(f"n_labels={n_labels}  (inputs={train_ds.n_input_targets}, categories={train_ds.n_category_targets})")
 
-    all_targets = []
-    for _, target in train_ds:
-        all_targets.append(target)
-
-    all_targets = torch.stack(all_targets)
-    mask = all_targets != -1
-    pos_rate = (all_targets[mask] == 1).float().mean()
-    print(f"positive rate: {pos_rate:.4f}")
+    pos_weight = torch.tensor([19.0]).to(device)
+    print(f'Positive weight: {pos_weight}')
 
     # ── model ───────────────────────────────────────────────────────────────
     device = torch.device(args.device)
@@ -199,11 +198,12 @@ def main():
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
 
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, device, pos_weight)
         val_loss, overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec = evaluate(
             model, val_loader, device, 
             len(med_labels), 
-            len(med_categories)
+            len(med_categories),
+            pos_weight
         )
         scheduler.step(val_loss)
 
