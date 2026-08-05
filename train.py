@@ -123,7 +123,7 @@ def main():
     parser.add_argument('--signals',       nargs='+', default=['PLETH', 'II', 'ABP'])
     parser.add_argument('--epochs',        type=int,   default=20)
     parser.add_argument('--batch_size',    type=int,   default=32)
-    parser.add_argument('--lr',            type=float, default=1e-4)
+    parser.add_argument('--lr',            type=float, default=1e-3)
     parser.add_argument('--num_workers',   type=int,   default=4)
     parser.add_argument('--val_split',     type=float, default=0.1,
                         help='Fraction of files held out for validation')
@@ -173,6 +173,15 @@ def main():
 
     n_labels = train_ds.n_input_targets + train_ds.n_category_targets
     print(f"n_labels={n_labels}  (inputs={train_ds.n_input_targets}, categories={train_ds.n_category_targets})")
+
+    all_targets = []
+    for _, target in train_ds:
+        all_targets.append(target)
+
+    all_targets = torch.stack(all_targets)
+    mask = all_targets != -1
+    pos_rate = (all_targets[mask] == 1).float().mean()
+    print(f"positive rate: {pos_rate:.4f}")
 
     # ── model ───────────────────────────────────────────────────────────────
     device = torch.device(args.device)

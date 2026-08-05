@@ -25,6 +25,7 @@ def masked_bce_loss(logits, targets):
     mask = targets != -1                          # (B, n_labels) bool
     logits  = logits[mask]
     targets = targets[mask]
+    print(f"active labels: {mask.sum().item()} / {mask.numel()}")
     return F.binary_cross_entropy_with_logits(logits, targets)
 
 
