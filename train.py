@@ -14,7 +14,8 @@ def masked_bce_loss(logits, targets, pos_weight=None):
     mask = targets != -1                          # (B, n_labels) bool
     logits  = logits[mask]
     targets = targets[mask]
-    return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight)
+    pw = pos_weight[mask] if pos_weight is not None else None
+    return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pw)
 
 def train_one_epoch(model, loader, optimizer, device, pos_weight):
     model.train()
@@ -46,6 +47,20 @@ def train_one_epoch(model, loader, optimizer, device, pos_weight):
     acc      = total_correct / max(total_valid, 1)
     return avg_loss, acc
 
+def masked_metrics(logits, targets):
+    mask    = targets != -1
+    preds   = (torch.sigmoid(logits) > 0.5).float()
+    correct = (preds[mask] == targets[mask]).float().mean().item()
+    
+    # of all positive predictions, how many are right
+    pos_mask = (preds == 1) & mask
+    precision = (targets[pos_mask] == 1).float().mean().item() if pos_mask.sum() > 0 else 0.0
+    
+    # of all true positives, how many did we catch
+    true_pos_mask = (targets == 1) & mask
+    recall = (preds[true_pos_mask] == 1).float().mean().item() if true_pos_mask.sum() > 0 else 0.0
+
+    return correct, precision, recall
 
 @torch.no_grad()
 def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_weight):
@@ -56,18 +71,18 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_wei
     all_logits  = []
     all_targets = []
 
-    with torch.no_grad():
-        for waveform, targets in loader:
-            waveform = waveform.to(device)
-            targets  = targets.to(device)
 
-            logits = model(waveform)
-            loss   = masked_bce_loss(logits, targets, pos_weight)
-            total_loss += loss.item()
-            n_batches  += 1
+    for waveform, targets in loader:
+        waveform = waveform.to(device)
+        targets  = targets.to(device)
 
-            all_logits.append(logits.cpu())
-            all_targets.append(targets.cpu())
+        logits = model(waveform)
+        loss   = masked_bce_loss(logits, targets, pos_weight)
+        total_loss += loss.item()
+        n_batches  += 1
+
+        all_logits.append(logits.cpu())
+        all_targets.append(targets.cpu())
 
     all_logits  = torch.cat(all_logits,  dim=0)  # (N, n_labels)
     all_targets = torch.cat(all_targets, dim=0)  # (N, n_labels)
@@ -101,21 +116,6 @@ def build_dataset(metadata, signals, med_labels, med_categories, task, data_dir)
         task=task,
         data_dir=data_dir
     )
-
-def masked_metrics(logits, targets):
-    mask    = targets != -1
-    preds   = (torch.sigmoid(logits) > 0.5).float()
-    correct = (preds[mask] == targets[mask]).float().mean().item()
-    
-    # of all positive predictions, how many are right
-    pos_mask = (preds == 1) & mask
-    precision = (targets[pos_mask] == 1).float().mean().item() if pos_mask.sum() > 0 else 0.0
-    
-    # of all true positives, how many did we catch
-    true_pos_mask = (targets == 1) & mask
-    recall = (preds[true_pos_mask] == 1).float().mean().item() if true_pos_mask.sum() > 0 else 0.0
-
-    return correct, precision, recall
 
 
 def main():
@@ -180,8 +180,8 @@ def main():
 
     # ── model ───────────────────────────────────────────────────────────────
     device = torch.device(args.device)
-    pos_weight = torch.tensor([19.0]).to(device)
-    print(f'Positive weight: {pos_weight}')
+    pos_weight = torch.full((n_labels,), 3.0).to(device)
+   
     model  = ResNet50(in_channels=len(args.signals), classes=n_labels).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Model params: {n_params:.1f}M  |  device: {device}")
