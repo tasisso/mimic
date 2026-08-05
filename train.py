@@ -58,6 +58,7 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets):
             logits = model(waveform)
             loss   = masked_bce_loss(logits, targets)
             total_loss += loss.item()
+            n_batches  += 1
 
             all_logits.append(logits.cpu())
             all_targets.append(targets.cpu())
@@ -82,7 +83,7 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets):
     input_acc, input_prec, input_rec = masked_metrics(input_logits, input_targets)
     cat_acc,   cat_prec,   cat_rec   = masked_metrics(cat_logits,   cat_targets)
 
-    return total_loss / len(loader), overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec
+    return total_loss / n_batches, overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec
 
 
 def build_dataset(metadata, signals, med_labels, med_categories, task, data_dir):
