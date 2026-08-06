@@ -12,7 +12,7 @@ from models.resnet import ResNet50
 
 def masked_bce_loss(logits, targets, pos_weight=None):
     mask = targets != -1                          # (B, n_labels) bool
-    pw = pw = pos_weight.unsqueeze(0).expand_as(targets)[mask] if pos_weight is not None else None
+    pw = pos_weight.unsqueeze(0).expand_as(targets)[mask] if pos_weight is not None else None
     logits  = logits[mask]
     targets = targets[mask]
     return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pw)
