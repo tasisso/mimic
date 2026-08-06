@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+from tqdm import tqdm
 
 import pandas as pd
 import torch
@@ -24,6 +25,7 @@ def train_one_epoch(model, loader, optimizer, device, pos_weight):
     total_valid = 0
     n_batches = 0
 
+    pbar = tqdm(loader, desc='train', leave=False)
     for waveform, targets in loader:
         waveform = waveform.to(device)
         targets  = targets.to(device)
@@ -42,6 +44,8 @@ def train_one_epoch(model, loader, optimizer, device, pos_weight):
             total_valid   += mask.sum().item()
             total_loss    += loss.item()
             n_batches     += 1
+        
+        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
     avg_loss = total_loss / max(n_batches, 1)
     acc      = total_correct / max(total_valid, 1)
@@ -71,7 +75,7 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_wei
     all_logits  = []
     all_targets = []
 
-
+    pbar = tqdm(loader, desc='val', leave=False)
     for waveform, targets in loader:
         waveform = waveform.to(device)
         targets  = targets.to(device)
@@ -83,6 +87,8 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_wei
 
         all_logits.append(logits.cpu())
         all_targets.append(targets.cpu())
+        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+
 
     all_logits  = torch.cat(all_logits,  dim=0)  # (N, n_labels)
     all_targets = torch.cat(all_targets, dim=0)  # (N, n_labels)
