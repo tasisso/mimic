@@ -7,6 +7,8 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from sklearn.metrics import roc_auc_score, average_precision_score
+import numpy as np
 
 from icu_dataset import ICUDataset
 from models.resnet import ResNet50
@@ -21,12 +23,10 @@ def masked_bce_loss(logits, targets, pos_weight=None):
 def train_one_epoch(model, loader, optimizer, device, pos_weight):
     model.train()
     total_loss = 0.0
-    total_correct = 0
-    total_valid = 0
     n_batches = 0
 
     pbar = tqdm(loader, desc='train', leave=False)
-    for waveform, targets in loader:
+    for waveform, targets in pbar:
         waveform = waveform.to(device)
         targets  = targets.to(device)
 
@@ -37,19 +37,13 @@ def train_one_epoch(model, loader, optimizer, device, pos_weight):
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        with torch.no_grad():
-            mask = targets != -1
-            preds = (torch.sigmoid(logits) > 0.5).float()
-            total_correct += (preds[mask] == targets[mask]).sum().item()
-            total_valid   += mask.sum().item()
-            total_loss    += loss.item()
-            n_batches     += 1
+        total_loss    += loss.item()
+        n_batches     += 1
         
-        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+        pbar.set_postfix({'loss': f'{total_loss / n_batches:.4f}'})
 
     avg_loss = total_loss / max(n_batches, 1)
-    acc      = total_correct / max(total_valid, 1)
-    return avg_loss, acc
+    return avg_loss
 
 def masked_metrics(logits, targets):
     mask    = targets != -1
@@ -66,8 +60,45 @@ def masked_metrics(logits, targets):
 
     return correct, precision, recall
 
+
+
+def compute_auroc_auprc(all_logits, all_targets, label_names):
+    """
+    all_logits:  (N, n_labels) tensor
+    all_targets: (N, n_labels) tensor with -1 for masked
+    """
+    probs   = torch.sigmoid(all_logits).numpy()
+    targets = all_targets.numpy()
+
+    auroc_scores = {}
+    auprc_scores = {}
+
+    for i, name in enumerate(label_names):
+        # mask out -1 entries for this label
+        mask = targets[:, i] != -1
+        y_true = targets[mask, i]
+        y_prob = probs[mask, i]
+
+        # need at least one positive and one negative
+        if y_true.sum() == 0 or (1 - y_true).sum() == 0:
+            auroc_scores[name] = float('nan')
+            auprc_scores[name] = float('nan')
+            continue
+
+        auroc_scores[name] = roc_auc_score(y_true, y_prob)
+        auprc_scores[name] = average_precision_score(y_true, y_prob)
+
+    # macro average ignoring nan labels
+    valid_auroc = [v for v in auroc_scores.values() if not np.isnan(v)]
+    valid_auprc = [v for v in auprc_scores.values() if not np.isnan(v)]
+
+    macro_auroc = np.mean(valid_auroc)
+    macro_auprc = np.mean(valid_auprc)
+
+    return auroc_scores, auprc_scores, macro_auroc, macro_auprc
+
 @torch.no_grad()
-def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_weight):
+def evaluate(model, loader, device, pos_weight, med_labels, med_categories):
     model.eval()
     total_loss = 0
     n_batches  = 0
@@ -76,7 +107,7 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_wei
     all_targets = []
 
     pbar = tqdm(loader, desc='val', leave=False)
-    for waveform, targets in loader:
+    for waveform, targets in pbar:
         waveform = waveform.to(device)
         targets  = targets.to(device)
 
@@ -87,30 +118,26 @@ def evaluate(model, loader, device, n_input_targets, n_category_targets, pos_wei
 
         all_logits.append(logits.cpu())
         all_targets.append(targets.cpu())
-        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+        pbar.set_postfix({'loss': f'{total_loss / n_batches:.4f}'})
 
+    all_logits  = torch.cat(all_logits,  dim=0)
+    all_targets = torch.cat(all_targets, dim=0)
 
-    all_logits  = torch.cat(all_logits,  dim=0)  # (N, n_labels)
-    all_targets = torch.cat(all_targets, dim=0)  # (N, n_labels)
+    label_names = med_labels + med_categories
+    auroc_scores, auprc_scores, macro_auroc, macro_auprc = compute_auroc_auprc(
+        all_logits, all_targets, label_names
+    )
 
-    # split by label group
-    input_logits    = all_logits[:,  :n_input_targets]
-    input_targets   = all_targets[:, :n_input_targets]
-    cat_logits      = all_logits[:,  n_input_targets:]
-    cat_targets     = all_targets[:, n_input_targets:]
+    # per label
+    for name in label_names:
+        auroc = auroc_scores[name]
+        auprc = auprc_scores[name]
+        if not np.isnan(auroc):
+            print(f"  {name:30s}  AUROC {auroc:.3f}  AUPRC {auprc:.3f}")
 
-    def masked_acc(logits, targets):
-        mask  = targets != -1
-        preds = (torch.sigmoid(logits) > 0.5).float()
-        return (preds[mask] == targets[mask]).float().mean().item()
+    print(f"\n  macro AUROC {macro_auroc:.3f}  macro AUPRC {macro_auprc:.3f}")
 
-
-    overall_acc  = masked_acc(all_logits,    all_targets)
-
-    input_acc, input_prec, input_rec = masked_metrics(input_logits, input_targets)
-    cat_acc,   cat_prec,   cat_rec   = masked_metrics(cat_logits,   cat_targets)
-
-    return total_loss / n_batches, overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec
+    return total_loss / n_batches, macro_auroc, macro_auprc
 
 
 def build_dataset(metadata, signals, med_labels, med_categories, task, data_dir):
@@ -134,7 +161,7 @@ def main():
     parser.add_argument('--epochs',        type=int,   default=20)
     parser.add_argument('--batch_size',    type=int,   default=32)
     parser.add_argument('--lr',            type=float, default=1e-3)
-    parser.add_argument('--num_workers',   type=int,   default=4)
+    parser.add_argument('--num_workers',   type=int,   default=0)
     parser.add_argument('--val_split',     type=float, default=0.1,
                         help='Fraction of files held out for validation')
     parser.add_argument('--checkpoint_dir', default='checkpoints')
@@ -144,19 +171,34 @@ def main():
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     # ── labels ──────────────────────────────────────────────────────────────
-    med_labels = [
-        'diltiazem', 'cisatracurium', 'lorazepam', 'nitroglycerin', 'fentanyl',
-        'midazolam', 'meperidine', 'ketamine', 'esmolol', 'metoprolol',
-        'angiotensin_ii', 'propofol', 'mannitol', 'hydromorphone', 'nicardipine',
-        'dopamine', 'labetalol', 'vasopressin', 'nitroprusside', 'epinephrine',
-        'dexmedetomidine', 'acetaminophen_iv', 'epoprostenol', 'haloperidol',
-        'norepinephrine', 'digoxin', 'amiodarone', 'dobutamine', 'furosemide',
-        'milrinone', 'bumetanide', 'morphine', 'hydralazine', 'phenylephrine',
-    ]
+    # med_labels = [
+    #     'diltiazem', 'cisatracurium', 'lorazepam', 'nitroglycerin', 'fentanyl',
+    #     'midazolam', 'meperidine', 'ketamine', 'esmolol', 'metoprolol',
+    #     'angiotensin_ii', 'propofol', 'mannitol', 'hydromorphone', 'nicardipine',
+    #     'dopamine', 'labetalol', 'vasopressin', 'nitroprusside', 'epinephrine',
+    #     'dexmedetomidine', 'acetaminophen_iv', 'epoprostenol', 'haloperidol',
+    #     'norepinephrine', 'digoxin', 'amiodarone', 'dobutamine', 'furosemide',
+    #     'milrinone', 'bumetanide', 'morphine', 'hydralazine', 'phenylephrine',
+    # ]
     med_categories = [
         'vasopressor', 'antiarrhythmic', 'vasoactive', 'negative_inotrope',
-        'diuretic', 'vasodilator', 'positive_inotrope', 'analgesic', 'nm_blocker',
+        'diuretic', 'vasodilator', 'positive_inotrope', 'analgesic',
     ]
+    med_labels = [
+        'propofol', 'fentanyl', 'norepinephrine', 'dexmedetomidine', 'vasopressin',
+        'phenylephrine',
+        'furosemide',
+        'amiodarone',
+        'nitroglycerin',
+        'nicardipine',
+        'epinephrine',
+        'midazolam',
+        'hydromorphone',
+        'acetaminophen',
+        'morphine',
+        'metoprolol',
+        'hydralazine',
+        'lorazepam']
 
     # ── data split ──────────────────────────────────────────────────────────
     metadata = pd.read_csv(args.metadata)
@@ -177,16 +219,17 @@ def main():
     val_ds   = build_dataset(val_df,   args.signals, med_labels, med_categories, args.task, data_dir=args.data_dir)
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
-                              num_workers=args.num_workers, pin_memory=True)
+                              num_workers=0, pin_memory=False)
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
-                              num_workers=args.num_workers, pin_memory=True)
+                              num_workers=0, pin_memory=False)
 
     n_labels = train_ds.n_input_targets + train_ds.n_category_targets
     print(f"n_labels={n_labels}  (inputs={train_ds.n_input_targets}, categories={train_ds.n_category_targets})")
 
     # ── model ───────────────────────────────────────────────────────────────
     device = torch.device(args.device)
-    pos_weight = torch.full((n_labels,), 3.0).to(device)
+    # pos_weight = torch.full((n_labels,), 3.0).to(device)
+    pos_weight = None
    
     model  = ResNet50(in_channels=len(args.signals), classes=n_labels).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
@@ -198,16 +241,16 @@ def main():
     )
 
     # ── training loop ───────────────────────────────────────────────────────
-    best_val_loss = float('inf')
+    best_val_loss   = float('inf')
+    best_train_loss = float('inf')
+
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
 
-        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, device, pos_weight)
-        val_loss, overall_acc, input_acc, input_prec, input_rec, cat_acc, cat_prec, cat_rec = evaluate(
-            model, val_loader, device, 
-            len(med_labels), 
-            len(med_categories),
-            pos_weight
+        train_loss= train_one_epoch(model, train_loader, optimizer, device, pos_weight)
+        val_loss, macro_auroc, macro_auprc = evaluate(
+            model, val_loader, device,
+            pos_weight, med_labels, med_categories
         )
         scheduler.step(val_loss)
 
@@ -215,18 +258,33 @@ def main():
         print(
             f"epoch {epoch:3d}/{args.epochs} | "
             f"train loss {train_loss:.4f} | "
-            f"val loss {val_loss:.4f} | \n"
-            f"  input    acc {input_acc:.3f}  prec {input_prec:.3f}  rec {input_rec:.3f} | \n"
-            f"  category acc {cat_acc:.3f}  prec {cat_prec:.3f}  rec {cat_rec:.3f}"
+            f"val loss {val_loss:.4f} | "
+            f"AUROC {macro_auroc:.3f} | "
+            f"AUPRC {macro_auprc:.3f} | "
             f"{elapsed:.0f}s"
         )
 
+        # save best val checkpoint
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            ckpt_path = os.path.join(args.checkpoint_dir, 'best.pt')
-            torch.save({'epoch': epoch, 'model': model.state_dict(),
-                        'val_loss': val_loss, 'val_acc': overall_acc}, ckpt_path)
-            print(f"  → saved checkpoint (val_loss={val_loss:.4f})")
+            torch.save({
+                'epoch': epoch,
+                'model': model.state_dict(),
+                'val_loss': val_loss,
+                'macro_auroc': macro_auroc,
+                'macro_auprc': macro_auprc
+            }, os.path.join(args.checkpoint_dir, 'best_val.pt'))
+            print(f"  → saved val checkpoint (val_loss={val_loss:.4f})")
+
+        # save best train checkpoint
+        if train_loss < best_train_loss:
+            best_train_loss = train_loss
+            torch.save({
+                'epoch': epoch,
+                'model': model.state_dict(),
+                'train_loss': train_loss,
+            }, os.path.join(args.checkpoint_dir, 'best_train.pt'))
+            print(f"  → saved train checkpoint (train_loss={train_loss:.4f})")
 
     print(f"\nDone. Best val loss: {best_val_loss:.4f}")
 
