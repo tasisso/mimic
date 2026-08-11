@@ -176,7 +176,6 @@ def main():
         epochs          = args.epochs,
         batch_size      = args.batch_size,
         lr              = args.lr,
-        freeze_encoder  = args.freeze_encoder,
         device          = args.device,
     )
 
