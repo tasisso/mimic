@@ -301,6 +301,41 @@ class ICUDataset(IterableDataset):
                     torch.tensor(all_targets, dtype=torch.float32),
                 )
 
+class ICUDatasetICD(IterableDataset):
+    def __init__(self, metadata, icd_matrix, signals, data_dir):
+        self.metadata   = metadata.reset_index(drop=True)
+        self.icd_matrix = icd_matrix  # (n_files, n_icd_codes)
+        self.signals    = signals
+        self.data_dir   = data_dir
+
+    def __iter__(self):
+        for j, row in self.metadata.iterrows():
+            h5_path  = os.path.join(self.data_dir, row['h5_filepath'])
+            icd_vec  = self.icd_matrix[j].astype(np.float32)  # (n_icd_codes,)
+            n_chunks = row['n_chunks']
+
+            with h5py.File(h5_path, 'r') as f:
+                wave_keys  = set(f['waveforms'].keys())
+                chunk_size = f['waveforms'][next(iter(wave_keys))].shape[1]
+
+                wave_arrays = {
+                    s: f['waveforms'][s][:] if s in wave_keys else None
+                    for s in self.signals
+                }
+
+            for i in range(n_chunks):
+                waveform = np.stack([
+                    wave_arrays[s][i] if wave_arrays[s] is not None
+                    else np.full(chunk_size, 0.0, dtype=np.float32)
+                    for s in self.signals
+                ])
+                waveform = np.nan_to_num(waveform, nan=0.0)
+
+                yield (
+                    torch.tensor(waveform, dtype=torch.float32),
+                    torch.tensor(icd_vec,  dtype=torch.float32)
+                )
+
 
 if __name__ == '__main__':
     import argparse

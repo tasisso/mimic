@@ -72,6 +72,32 @@ class ResNet50(nn.Module):
         x = self.classifer(x)
         return x
 
+class FineTuneModel(nn.Module):
+    def __init__(self, pretrained_checkpoint, n_signals, n_med_labels, 
+                 n_med_categories, n_icd_codes, freeze_encoder=True):
+        super().__init__()
+
+        # load pretrained encoder
+        full_model = ResNet50(in_channels=n_signals, classes=n_med_labels + n_med_categories)
+        ckpt = torch.load(pretrained_checkpoint, map_location='cpu', weights_only=False)
+        full_model.load_state_dict(ckpt['model'])
+
+        self.encoder = full_model.features
+
+        if freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+
+        self.head = nn.Sequential(
+            nn.LayerNorm(2048),
+            nn.Linear(2048, n_icd_codes)
+        )
+
+    def forward(self, x):
+        z = self.encoder(x)       # (B, 2048, 1)
+        z = z.squeeze(-1)         # (B, 2048)
+        return self.head(z)       # (B, n_icd_codes)
+
 if __name__ == '__main__':
     x = torch.randn(size=(1,1,224))
     # x = torch.randn(size=(1,64,224))
