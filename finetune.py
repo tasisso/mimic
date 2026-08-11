@@ -139,7 +139,6 @@ def main():
     parser.add_argument('--epochs',           type=int,   default=30)
     parser.add_argument('--batch_size',       type=int,   default=32)
     parser.add_argument('--lr',               type=float, default=1e-3)
-    parser.add_argument('--freeze_encoder',   action='store_true', default=True)
     parser.add_argument('--device',           default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
 
