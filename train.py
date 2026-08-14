@@ -162,8 +162,6 @@ def main():
     parser.add_argument('--batch_size',    type=int,   default=32)
     parser.add_argument('--lr',            type=float, default=1e-3)
     parser.add_argument('--num_workers',   type=int,   default=0)
-    parser.add_argument('--val_split',     type=float, default=0.1,
-                        help='Fraction of files held out for validation')
     parser.add_argument('--checkpoint_dir', default='checkpoints')
     parser.add_argument('--device',        default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
@@ -200,27 +198,21 @@ def main():
         'hydralazine',
         'lorazepam']
 
-    # ── data split ──────────────────────────────────────────────────────────
+    # ── data ────────────────────────────────────────────────────────────────
     metadata = pd.read_csv(args.metadata)
     metadata = metadata[metadata['has_inputs'] == 1].reset_index(drop=True)
 
     if 'split' in metadata.columns:
-        train_df = metadata[(metadata['has_inputs'] == 1) & (metadata['split'] == 'train')]
-        val_df   = metadata[(metadata['has_inputs'] == 1) & (metadata['split'] == 'val')]
+        train_df = metadata[metadata['split'] == 'train']
     else:
-        n_val    = max(1, int(len(metadata) * args.val_split))
-        val_df   = metadata.iloc[:n_val]
-        train_df = metadata.iloc[n_val:]
+        train_df = metadata
 
-    print(f"Train files: {len(train_df)}  |  Val files: {len(val_df)}")
+    print(f"Train files: {len(train_df)}")
 
     # ── datasets & loaders ──────────────────────────────────────────────────
     train_ds = build_dataset(train_df, args.signals, med_labels, med_categories, args.task, data_dir=args.data_dir)
-    val_ds   = build_dataset(val_df,   args.signals, med_labels, med_categories, args.task, data_dir=args.data_dir)
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
-                              num_workers=0, pin_memory=False)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
                               num_workers=0, pin_memory=False)
 
     n_labels = train_ds.n_input_targets + train_ds.n_category_targets
@@ -241,52 +233,31 @@ def main():
     )
 
     # ── training loop ───────────────────────────────────────────────────────
-    best_val_loss   = float('inf')
     best_train_loss = float('inf')
 
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
 
-        train_loss= train_one_epoch(model, train_loader, optimizer, device, pos_weight)
-        val_loss, macro_auroc, macro_auprc = evaluate(
-            model, val_loader, device,
-            pos_weight, med_labels, med_categories
-        )
-        scheduler.step(val_loss)
+        train_loss = train_one_epoch(model, train_loader, optimizer, device, pos_weight)
+        scheduler.step(train_loss)
 
         elapsed = time.time() - t0
         print(
             f"epoch {epoch:3d}/{args.epochs} | "
             f"train loss {train_loss:.4f} | "
-            f"val loss {val_loss:.4f} | "
-            f"AUROC {macro_auroc:.3f} | "
-            f"AUPRC {macro_auprc:.3f} | "
             f"{elapsed:.0f}s"
         )
 
-        # save best val checkpoint
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save({
-                'epoch': epoch,
-                'model': model.state_dict(),
-                'val_loss': val_loss,
-                'macro_auroc': macro_auroc,
-                'macro_auprc': macro_auprc
-            }, os.path.join(args.checkpoint_dir, 'best_val.pt'))
-            print(f"  → saved val checkpoint (val_loss={val_loss:.4f})")
-
-        # save best train checkpoint
         if train_loss < best_train_loss:
             best_train_loss = train_loss
             torch.save({
                 'epoch': epoch,
                 'model': model.state_dict(),
                 'train_loss': train_loss,
-            }, os.path.join(args.checkpoint_dir, 'best_train.pt'))
-            print(f"  → saved train checkpoint (train_loss={train_loss:.4f})")
+            }, os.path.join(args.checkpoint_dir, 'best.pt'))
+            print(f"  → checkpoint saved (train_loss={train_loss:.4f})")
 
-    print(f"\nDone. Best val loss: {best_val_loss:.4f}")
+    print(f"\nDone. Best train loss: {best_train_loss:.4f}")
 
 
 if __name__ == '__main__':
