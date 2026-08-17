@@ -27,16 +27,16 @@ def finetune(checkpoint_path, checkpoint_dir, icd_class_path, metadata_path, dat
     icd_matrix = mlb.fit_transform(icd_lists)
 
     train_meta = metadata[metadata['split'] == 'train'].reset_index(drop=True)
-    val_meta   = metadata[metadata['split'] == 'val'].reset_index(drop=True)
+    # val_meta   = metadata[metadata['split'] == 'val'].reset_index(drop=True)
 
     train_icd  = icd_matrix[train_meta.index]
-    val_icd    = icd_matrix[val_meta.index]
+    # val_icd    = icd_matrix[val_meta.index]
 
     train_ds = ICUDatasetICD(train_meta, train_icd, signals, data_dir)
-    val_ds   = ICUDatasetICD(val_meta,   val_icd,   signals, data_dir)
+    # val_ds   = ICUDatasetICD(val_meta,   val_icd,   signals, data_dir)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, num_workers=0)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size, num_workers=0)
+    # val_loader   = DataLoader(val_ds,   batch_size=batch_size, num_workers=0)
 
     model = FineTuneModel(
         pretrained_checkpoint = checkpoint_path,
@@ -53,7 +53,7 @@ def finetune(checkpoint_path, checkpoint_dir, icd_class_path, metadata_path, dat
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
-    best_val_loss = float('inf')
+    # best_val_loss = float('inf')
     best_train_loss = float('inf')
 
     for epoch in range(1, epochs + 1):
@@ -80,44 +80,50 @@ def finetune(checkpoint_path, checkpoint_dir, icd_class_path, metadata_path, dat
         train_loss = total_loss / max(n_batches, 1)
 
         # evaluate
-        model.eval()
-        val_loss  = 0
-        n_batches = 0
-        all_logits  = []
-        all_targets = []
+        # model.eval()
+        # val_loss  = 0
+        # n_batches = 0
+        # all_logits  = []
+        # all_targets = []
 
-        with torch.no_grad():
-            for waveform, targets in tqdm(val_loader, desc='val', leave=False):
-                waveform = waveform.to(device)
-                targets  = targets.to(device)
-                logits   = model(waveform)
-                loss     = F.binary_cross_entropy_with_logits(logits, targets)
-                val_loss += loss.item()
-                n_batches += 1
-                all_logits.append(logits.cpu())
-                all_targets.append(targets.cpu())
+        # with torch.no_grad():
+        #     for waveform, targets in tqdm(val_loader, desc='val', leave=False):
+        #         waveform = waveform.to(device)
+        #         targets  = targets.to(device)
+        #         logits   = model(waveform)
+        #         loss     = F.binary_cross_entropy_with_logits(logits, targets)
+        #         val_loss += loss.item()
+        #         n_batches += 1
+        #         all_logits.append(logits.cpu())
+        #         all_targets.append(targets.cpu())
 
-        val_loss   = val_loss / max(n_batches, 1)
-        all_logits  = torch.cat(all_logits,  dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
+        # val_loss   = val_loss / max(n_batches, 1)
+        # all_logits  = torch.cat(all_logits,  dim=0)
+        # all_targets = torch.cat(all_targets, dim=0)
 
-        _, _, macro_auroc, macro_auprc = compute_auroc_auprc(
-            all_logits, all_targets, list(icd_classes)
+        # _, _, macro_auroc, macro_auprc = compute_auroc_auprc(
+        #     all_logits, all_targets, list(icd_classes)
+        # )
+        scheduler.step(train_loss)
+
+        # print(f"epoch {epoch:3d}/{epochs} | train {train_loss:.4f} | "
+        #       f"val {val_loss:.4f} | AUROC {macro_auroc:.3f} | "
+        #       f"AUPRC {macro_auprc:.3f} | {time.time()-t0:.0f}s")
+        elapsed = time.time() - t0
+        print(
+            f"epoch {epoch:3d}/{epochs} | "
+            f"train loss {train_loss:.4f} | "
+            f"{elapsed:.0f}s"
         )
-        scheduler.step(val_loss)
 
-        print(f"epoch {epoch:3d}/{epochs} | train {train_loss:.4f} | "
-              f"val {val_loss:.4f} | AUROC {macro_auroc:.3f} | "
-              f"AUPRC {macro_auprc:.3f} | {time.time()-t0:.0f}s")
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save({
-                'epoch': epoch, 'model': model.state_dict(),
-                'val_loss': val_loss, 'macro_auroc': macro_auroc,
-                'macro_auprc': macro_auprc
-            }, os.path.join(checkpoint_dir, 'best_val_icd.pt'))
-            print(f"  → saved checkpoint")
+        # if val_loss < best_val_loss:
+        #     best_val_loss = val_loss
+        #     torch.save({
+        #         'epoch': epoch, 'model': model.state_dict(),
+        #         'val_loss': val_loss, 'macro_auroc': macro_auroc,
+        #         'macro_auprc': macro_auprc
+        #     }, os.path.join(checkpoint_dir, 'best_val_icd.pt'))
+        #     print(f"  → saved checkpoint")
         
         if train_loss < best_train_loss:
             best_train_loss = train_loss
