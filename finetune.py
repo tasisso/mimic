@@ -138,6 +138,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint_path',   default='checkpoints/best.pt')
     parser.add_argument('--metadata',         default='data/metadata.csv')
+    parser.add_argument('--signals',          default=['PLETH'])
     parser.add_argument('--data_dir',         default='./data/data')
     parser.add_argument('--icd_class_path',      default='data/icd_classes.npy')
     parser.add_argument('--checkpoint_dir',   default='checkpoints')
