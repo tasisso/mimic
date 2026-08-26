@@ -21,7 +21,7 @@ MED_LABELS = [
     'metoprolol', 'hydralazine', 'lorazepam',
 ]
 MED_CATEGORIES = [
-    'vasopressor', 'antiarrhythmic', 'vasoactive', 'negative_inotrope',
+    'vasopressor', 'antiarrhythmic', 'negative_inotrope',
     'diuretic', 'vasodilator', 'positive_inotrope', 'analgesic',
 ]
 
