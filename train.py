@@ -163,6 +163,7 @@ def main():
     parser.add_argument('--lr',            type=float, default=1e-3)
     parser.add_argument('--num_workers',   type=int,   default=0)
     parser.add_argument('--checkpoint_dir', default='checkpoints')
+    parser.add_argument('--holdout_csv',   default='checkpoints/cv/holdout_meta.csv')
     parser.add_argument('--device',        default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
 
@@ -179,7 +180,7 @@ def main():
     #     'milrinone', 'bumetanide', 'morphine', 'hydralazine', 'phenylephrine',
     # ]
     med_categories = [
-        'vasopressor', 'antiarrhythmic', 'vasoactive', 'negative_inotrope',
+        'vasopressor', 'antiarrhythmic', 'negative_inotrope',
         'diuretic', 'vasodilator', 'positive_inotrope', 'analgesic',
     ]
     med_labels = [
@@ -202,8 +203,12 @@ def main():
     metadata = pd.read_csv(args.metadata)
     metadata = metadata[metadata['has_inputs'] == 1].reset_index(drop=True)
 
-    if 'split' in metadata.columns:
-        train_df = metadata[metadata['split'] == 'train']
+    if args.holdout_csv and os.path.exists(args.holdout_csv):
+        holdout_subjects = set(pd.read_csv(args.holdout_csv)['subject_id'])
+        train_df = metadata[~metadata['subject_id'].isin(holdout_subjects)].reset_index(drop=True)
+        print(f"Excluding {len(holdout_subjects)} holdout subjects")
+    elif 'split' in metadata.columns:
+        train_df = metadata[metadata['split'] == 'train'].reset_index(drop=True)
     else:
         train_df = metadata
 
