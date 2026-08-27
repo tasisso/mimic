@@ -2,10 +2,46 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import h5py
 import numpy as np
 import pandas as pd 
-import matplotlib.pyplot as plt
+import os
+
 from matplotlib.widgets import Slider
 from matplotlib.lines import Line2D
 from matplotlib.colors import ListedColormap
+
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as _fmex
+from pathlib import Path
+
+from matplotlib import font_manager
+
+_font_path = os.path.join(os.path.dirname(__file__), 'Google.ttf')
+font_manager.fontManager.addfont(_font_path)
+_prop = font_manager.FontProperties(fname=_font_path)
+_FONT = _prop.get_name()
+plt.rcParams['font.family'] = _FONT
+
+_fp_ex = Path('Google.ttf')
+if _fp_ex.exists():
+    _fmex.fontManager.addfont(str(_fp_ex))
+    _GF_ex = _fmex.FontProperties(fname=str(_fp_ex)).get_name()
+else:
+    _GF_ex = 'DejaVu Sans'
+
+_RC_ex = {
+    'font.family': _GF_ex, 'font.size': 11,
+    'axes.titlesize': 12, 'axes.labelsize': 11,
+    'xtick.labelsize': 9, 'ytick.labelsize': 9,
+    'legend.fontsize': 9,
+    'axes.spines.top': False, 'axes.spines.right': False,
+    'axes.linewidth': 0.8,
+    'figure.dpi': 300, 'savefig.dpi': 300,
+    'savefig.bbox': 'tight', 'savefig.pad_inches': 0.08,
+}
+_RC_ex_pub = dict(_RC_ex, **{
+    'font.size': 20, 'axes.titlesize': 18,
+    'axes.labelsize': 15, 'xtick.labelsize': 15,
+    'ytick.labelsize': 15, 'legend.fontsize': 15,
+})
 
 
 def visualize_labs(h5_path, lab_labels, signals=['II', 'PLETH'], window=1):
@@ -208,10 +244,11 @@ def visualize_labs(h5_path, lab_labels, signals=['II', 'PLETH'], window=1):
     update(0)
     plt.show()
 
-def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
+def visualize_meds(h5_path, med_labels, signals=['ABP', 'II', 'PLETH'], window=1, fs=125):
     with h5py.File(h5_path, 'r') as f:
         timestamps = [t.decode('utf-8') for t in f['timestamps'][:]]
         waves = {sig: f['waveforms'][sig][:] for sig in signals if sig in f['waveforms']}
+        subject_id = f.attrs.get('subject_id', '')
 
         med_data = {}
         if 'inputs' in f:
@@ -236,7 +273,7 @@ def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
     n_rate = len(rate_labels)
 
     # all _on flags (meds and/or categories) go into one consolidated heatmap
-    on_labels = [med for med in med_data.keys() if med.endswith('_on')]
+    on_labels = [med for med in med_data.keys() if med.endswith('_on') and not med.startswith('vasoactive')]
     n_on = len(on_labels)
 
     # --- layout ---
@@ -305,7 +342,8 @@ def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
         vals[changes] = np.nan
         ax.plot(vals, linewidth=0.8, color='darkorange', drawstyle='steps-post')
         ax.set_ylim(bottom=0)
-        ax.set_ylabel(med, rotation=0, ha='right', fontsize=7, labelpad=4)
+        ax.set_ylabel(f'{med}\n(mcg/kg/min)', rotation=0, ha='right', fontsize=7, labelpad=4)
+        ax.yaxis.label.set_va('center')
         ax.set_yticks([vmin, vmax])
         ax.yaxis.set_major_formatter(plt.FormatStrFormatter(f'%.{decimals}f'))
         ax.yaxis.set_tick_params(labelsize=5)
@@ -359,14 +397,20 @@ def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
     wave_avail_ax.set_xticklabels(range(0, n_chunks, tick_step), fontsize=6)
     wave_avail_ax.set_xlabel('Chunk', fontsize=8)
 
+    _SIG_UNITS = {'ABP': 'mmHg', 'II': 'mV', 'PLETH': 'NU'}
+
     # --- signal axes (60s intra-chunk view) ---
     chunk_size = fs * 60
     time_axis = np.arange(chunk_size) / fs
     sig_axes = []
     for j, sig in enumerate(waves):
         ax = fig.add_subplot(gs[row_sig_start + j])
+        if j == 0:
+            ax.set_title('Waveform Chunk', pad=5)
         line, = ax.plot(time_axis, waves[sig][0], linewidth=0.5, color='steelblue')
-        ax.set_ylabel(sig, rotation=0, ha='right', fontsize=7, labelpad=4)
+        unit = _SIG_UNITS.get(sig, '')
+        ylabel = f'{sig}\n({unit})' if unit else sig
+        ax.set_ylabel(ylabel, rotation=0, ha='right', fontsize=7, labelpad=4)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         if j == n_sigs - 1:
@@ -391,6 +435,11 @@ def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
     all_axes = rate_axes + [on_ax, wave_avail_ax]
     vlines = [ax.axvline(0, color='blue', linewidth=1, alpha=0.5) for ax in all_axes]
 
+    # center title over the plot area (gs left=0.15, right=0.95)
+    fig.text(0.55, 1.0, f'Subject {subject_id} — Inputs Example',
+             ha='center', va='top', fontsize=11, fontweight='bold',
+             transform=fig.transFigure)
+
     def update(val):
         chunk_id = int(slider.val)
         for vl in vlines:
@@ -400,7 +449,6 @@ def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
             ax.relim()
             ax.autoscale_view()
             ax.set_xlim(0, 60)
-        fig.suptitle(f'Chunk {chunk_id} — {timestamps[chunk_id]}', y=1.0)
         fig.canvas.draw_idle()
 
     def on_key(event):
@@ -413,3 +461,96 @@ def visualize_meds(h5_path, med_labels, signals=['ABP'], window=1, fs=125):
     fig.canvas.mpl_connect('key_press_event', on_key)
     update(0)
     plt.show()
+
+
+def visualize_predictions(h5_path, checkpoint_path, med_labels, med_categories,
+                          signals=['ABP', 'II', 'PLETH'], threshold=0.5, fs=125):
+    """
+    Plot model predicted on-flags vs true on-flags for a single subject recording.
+    Labels follow med_labels + med_categories ordering (matching train.py).
+    Returns (prob_matrix, true_matrix, label_names) for further analysis.
+    """
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    import torch
+    from models.resnet import ResNet50
+
+    label_names = list(med_labels) + list(med_categories)
+    n_labels = len(label_names)
+
+    with h5py.File(h5_path, 'r') as f:
+        subject_id = f.attrs.get('subject_id', '')
+        timestamps = [t.decode('utf-8') for t in f['timestamps'][:]]
+        waves = {sig: f['waveforms'][sig][:] for sig in signals if sig in f['waveforms']}
+
+        true_matrix = np.full((n_labels, len(timestamps)), np.nan)
+        if 'inputs' in f:
+            for i, name in enumerate(label_names):
+                key = f'{name}_on'
+                if key in f['inputs']:
+                    arr = f['inputs'][key][:].astype(float)
+                    arr[arr == -1] = np.nan
+                    true_matrix[i] = arr
+
+    n_chunks = len(timestamps)
+    chunk_size = fs * 60
+
+    model = ResNet50(in_channels=len(signals), classes=n_labels)
+    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    model.load_state_dict(ckpt['model'])
+    model.eval()
+
+    prob_matrix = np.zeros((n_labels, n_chunks), dtype=np.float32)
+    pred_matrix = np.zeros((n_labels, n_chunks), dtype=np.float32)
+
+    with torch.no_grad():
+        for i in range(n_chunks):
+            waveform = np.stack([
+                waves[s][i] if s in waves else np.zeros(chunk_size, dtype=np.float32)
+                for s in signals
+            ])
+            waveform = np.nan_to_num(waveform, nan=0.0)
+            x = torch.tensor(waveform, dtype=torch.float32).unsqueeze(0)
+            probs = torch.sigmoid(model(x)).squeeze(0).numpy()
+            prob_matrix[:, i] = probs
+            pred_matrix[:, i] = (probs >= threshold).astype(float)
+
+    tick_step = max(1, n_chunks // 20)
+    fig, axes = plt.subplots(2, 1, figsize=(13, 6), sharex=True,
+                             gridspec_kw={'hspace': 0.35})
+
+    cmap_true = ListedColormap(['#f0f0f0', 'steelblue'])
+    cmap_pred = ListedColormap(['#f0f0f0', 'darkorange'])
+
+    for ax, matrix, title, cmap in [
+        (axes[0], true_matrix, 'True on-flags', cmap_true),
+        (axes[1], pred_matrix, f'Predicted on-flags  (threshold={threshold})', cmap_pred),
+    ]:
+        ax.imshow(matrix, aspect='auto', cmap=cmap, vmin=0, vmax=1,
+                  interpolation='none')
+        ax.set_yticks(range(n_labels))
+        ax.set_yticklabels(label_names, fontsize=7)
+        ax.set_title(title, pad=6, fontsize=9)
+        ax.set_xlim(0, n_chunks)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+    axes[1].set_xticks(range(0, n_chunks, tick_step))
+    axes[1].set_xticklabels(range(0, n_chunks, tick_step), fontsize=6)
+    axes[1].set_xlabel('Chunk', fontsize=8)
+
+    fig.text(0.55, 1.01, f'Subject {subject_id} — Prediction vs Truth',
+             ha='center', va='top', fontsize=10, fontweight='bold',
+             transform=fig.transFigure)
+
+    from matplotlib.patches import Patch
+    fig.legend(handles=[
+        Patch(facecolor='steelblue',  label='True active'),
+        Patch(facecolor='darkorange', label='Predicted active'),
+        Patch(facecolor='#f0f0f0',    label='Off / masked', edgecolor='#ccc'),
+    ], loc='lower center', ncol=3, fontsize=8, framealpha=0.5,
+       bbox_to_anchor=(0.55, -0.04))
+
+    plt.tight_layout()
+    plt.show()
+    return prob_matrix, true_matrix, label_names
