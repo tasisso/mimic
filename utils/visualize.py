@@ -12,36 +12,36 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as _fmex
 from pathlib import Path
 
-from matplotlib import font_manager
+# from matplotlib import font_manager
 
-_font_path = os.path.join(os.path.dirname(__file__), 'Google.ttf')
-font_manager.fontManager.addfont(_font_path)
-_prop = font_manager.FontProperties(fname=_font_path)
-_FONT = _prop.get_name()
-plt.rcParams['font.family'] = _FONT
+# _font_path = os.path.join(os.path.dirname(__file__), 'Google.ttf')
+# font_manager.fontManager.addfont(_font_path)
+# _prop = font_manager.FontProperties(fname=_font_path)
+# _FONT = _prop.get_name()
+# plt.rcParams['font.family'] = _FONT
 
-_fp_ex = Path('Google.ttf')
-if _fp_ex.exists():
-    _fmex.fontManager.addfont(str(_fp_ex))
-    _GF_ex = _fmex.FontProperties(fname=str(_fp_ex)).get_name()
-else:
-    _GF_ex = 'DejaVu Sans'
+# _fp_ex = Path('Google.ttf')
+# if _fp_ex.exists():
+#     _fmex.fontManager.addfont(str(_fp_ex))
+#     _GF_ex = _fmex.FontProperties(fname=str(_fp_ex)).get_name()
+# else:
+#     _GF_ex = 'DejaVu Sans'
 
-_RC_ex = {
-    'font.family': _GF_ex, 'font.size': 11,
-    'axes.titlesize': 12, 'axes.labelsize': 11,
-    'xtick.labelsize': 9, 'ytick.labelsize': 9,
-    'legend.fontsize': 9,
-    'axes.spines.top': False, 'axes.spines.right': False,
-    'axes.linewidth': 0.8,
-    'figure.dpi': 300, 'savefig.dpi': 300,
-    'savefig.bbox': 'tight', 'savefig.pad_inches': 0.08,
-}
-_RC_ex_pub = dict(_RC_ex, **{
-    'font.size': 20, 'axes.titlesize': 18,
-    'axes.labelsize': 15, 'xtick.labelsize': 15,
-    'ytick.labelsize': 15, 'legend.fontsize': 15,
-})
+# _RC_ex = {
+#     'font.family': _GF_ex, 'font.size': 11,
+#     'axes.titlesize': 12, 'axes.labelsize': 11,
+#     'xtick.labelsize': 9, 'ytick.labelsize': 9,
+#     'legend.fontsize': 9,
+#     'axes.spines.top': False, 'axes.spines.right': False,
+#     'axes.linewidth': 0.8,
+#     'figure.dpi': 300, 'savefig.dpi': 300,
+#     'savefig.bbox': 'tight', 'savefig.pad_inches': 0.08,
+# }
+# _RC_ex_pub = dict(_RC_ex, **{
+#     'font.size': 20, 'axes.titlesize': 18,
+#     'axes.labelsize': 15, 'xtick.labelsize': 15,
+#     'ytick.labelsize': 15, 'legend.fontsize': 15,
+# })
 
 
 def visualize_labs(h5_path, lab_labels, signals=['II', 'PLETH'], window=1):
